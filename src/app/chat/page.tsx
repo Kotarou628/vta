@@ -90,13 +90,15 @@ export default function ChatPage() {
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
         />
-        <button
-          onClick={handleSend}
-          disabled={loading}
-          className="bg-blue-600 text-white px-4 py-2 mt-2 rounded disabled:opacity-50"
-        >
-          {loading ? '送信中...' : '送信'}
-        </button>
+        <div className="flex justify-end mt-2">
+          <button
+            onClick={handleSend}
+            disabled={loading || !input.trim()}
+            className="bg-blue-600 text-white px-4 py-2 rounded disabled:opacity-50"
+          >
+            {loading ? '送信中...' : '送信'}
+          </button>
+        </div>
       </div>
     </main>
   )

@@ -1,12 +1,20 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import ProblemList from '@/components/ProblemList'
+
+type Problem = {
+  id: string  // FirestoreのドキュメントID
+  title: string
+  description: string
+  solution_code: string
+  order?: number
+}
 
 export default function ProblemPage() {
-  const [problems, setProblems] = useState<any[]>([])
-  const [expandedId, setExpandedId] = useState<number | null>(null)
+  const [problems, setProblems] = useState<Problem[]>([])
+  const [expandedId, setExpandedId] = useState<string | null>(null)
 
-  // 編集用のstate（展開時に使う）
   const [editTitle, setEditTitle] = useState('')
   const [editDescription, setEditDescription] = useState('')
   const [editSolutionCode, setEditSolutionCode] = useState('')
@@ -18,29 +26,38 @@ export default function ProblemPage() {
   const fetchProblems = async () => {
     const res = await fetch('/api/problem')
     const data = await res.json()
-    setProblems(data)
+
+    const sorted = data.sort((a: Problem, b: Problem) => (a.order ?? 0) - (b.order ?? 0))
+    setProblems(sorted)
   }
 
   const handleSubmit = async () => {
     await fetch('/api/problem', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title: newTitle, description: newDescription, solution_code: newSolutionCode }),
+      body: JSON.stringify({
+        title: newTitle,
+        description: newDescription,
+        solution_code: newSolutionCode,
+      }),
     })
+
     setNewTitle('')
     setNewDescription('')
     setNewSolutionCode('')
+
     fetchProblems()
   }
 
-  const handleDelete = async (id: number) => {
+  const handleDelete = async (id: string) => {
     const ok = confirm('この問題を削除しますか？')
     if (!ok) return
+
     await fetch(`/api/problem/${id}`, { method: 'DELETE' })
     fetchProblems()
   }
 
-  const toggleExpand = (problem: any) => {
+  const toggleExpand = (problem: Problem) => {
     if (expandedId === problem.id) {
       setExpandedId(null)
     } else {
@@ -51,7 +68,7 @@ export default function ProblemPage() {
     }
   }
 
-  const handleUpdate = async (id: number) => {
+  const handleUpdate = async (id: string) => {
     await fetch(`/api/problem/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -61,7 +78,25 @@ export default function ProblemPage() {
         solution_code: editSolutionCode,
       }),
     })
+
     setExpandedId(null)
+    fetchProblems()
+  }
+
+  const handleReorder = async (newList: Problem[]) => {
+    setProblems(newList)
+
+    await fetch('/api/problem/reorder', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        problems: newList.map((p, index) => ({
+          id: p.id,
+          order: index,
+        })),
+      }),
+    })
+
     fetchProblems()
   }
 
@@ -103,54 +138,21 @@ export default function ProblemPage() {
 
       <hr className="my-6" />
 
-      {/* 一覧 */}
-      <ul className="space-y-4">
-        {problems.map((p) => (
-          <li key={p.id} className="border p-4 rounded bg-gray-100">
-            {/* タイトル押すと編集モード */}
-            <button
-              onClick={() => toggleExpand(p)}
-              className="text-left w-full font-semibold text-lg text-blue-800 hover:underline"
-            >
-              {p.title}
-            </button>
-
-            {expandedId === p.id && (
-              <div className="mt-2 space-y-2">
-                <input
-                  className="w-full border p-2"
-                  value={editTitle}
-                  onChange={(e) => setEditTitle(e.target.value)}
-                />
-                <textarea
-                  className="w-full border p-2"
-                  value={editDescription}
-                  onChange={(e) => setEditDescription(e.target.value)}
-                />
-                <textarea
-                  className="w-full border p-2"
-                  value={editSolutionCode}
-                  onChange={(e) => setEditSolutionCode(e.target.value)}
-                />
-                <div className="space-x-2">
-                  <button
-                    onClick={() => handleUpdate(p.id)}
-                    className="bg-green-600 text-white px-4 py-1 rounded"
-                  >
-                    更新
-                  </button>
-                  <button
-                    onClick={() => handleDelete(p.id)}
-                    className="text-red-600 hover:underline"
-                  >
-                    削除
-                  </button>
-                </div>
-              </div>
-            )}
-          </li>
-        ))}
-      </ul>
+      {/* 並べ替え可能なリスト */}
+      <ProblemList
+        problems={problems}
+        onReorder={handleReorder}
+        expandedId={expandedId}
+        toggleExpand={toggleExpand}
+        editTitle={editTitle}
+        setEditTitle={setEditTitle}
+        editDescription={editDescription}
+        setEditDescription={setEditDescription}
+        editSolutionCode={editSolutionCode}
+        setEditSolutionCode={setEditSolutionCode}
+        handleUpdate={handleUpdate}
+        handleDelete={handleDelete}
+      />
     </main>
   )
 }

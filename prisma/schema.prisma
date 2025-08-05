@@ -26,6 +26,7 @@ model problem {
   description   String?
   solution_code String?
   title         String?   @db.VarChar(255)
+  order         Int       @default(0) // ✅ 正しい場所！
 }
 
 model ta {
