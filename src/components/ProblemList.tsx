@@ -69,16 +69,24 @@ function SortableItem({
     <li
       ref={setNodeRef}
       style={style}
-      {...attributes}
-      {...listeners}
       className="border p-4 rounded bg-gray-100"
     >
-      <button
-        onClick={() => toggleExpand(problem)}
-        className="text-left w-full font-semibold text-lg text-blue-800 hover:underline"
-      >
-        {problem.title}
-      </button>
+      {/* 全体にクリック可能にする */}
+      <div onClick={() => toggleExpand(problem)} className="cursor-pointer">
+        <div className="flex justify-between items-center">
+          <span className="font-semibold text-lg text-blue-800">{problem.title}</span>
+
+          {/* ドラッグハンドルだけにリスナーを適用 */}
+          <span
+            {...attributes}
+            {...listeners}
+            className="cursor-move text-gray-500"
+            title="ドラッグで並び替え"
+          >
+            ☰
+          </span>
+        </div>
+      </div>
 
       {expandedId === problem.id && (
         <div className="mt-2 space-y-2">
@@ -114,6 +122,7 @@ function SortableItem({
         </div>
       )}
     </li>
+
   )
 }
 

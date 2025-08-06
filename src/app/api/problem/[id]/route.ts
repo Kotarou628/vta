@@ -1,3 +1,4 @@
+// src/app/api/problem/[id]/route.ts
 import { db } from '@/lib/firebase-admin';
 import { NextRequest, NextResponse } from 'next/server';
 
@@ -32,5 +33,28 @@ export async function PUT(req: NextRequest) {
     return NextResponse.json({ message: 'Updated successfully' });
   } catch (error) {
     return NextResponse.json({ error: 'Failed to update' }, { status: 500 });
+  }
+}
+
+export async function GET(_: NextRequest, { params }: { params: { id: string } }) {
+  const id = params.id;
+
+  if (!id) {
+    return NextResponse.json({ error: 'Invalid ID' }, { status: 400 });
+  }
+
+  try {
+    const doc = await db.collection('problem').doc(id).get();
+    if (!doc.exists) {
+      return NextResponse.json({ error: 'Not Found' }, { status: 404 });
+    }
+
+    const data = doc.data();
+    return NextResponse.json({
+      description: data?.description || '',
+      solution_code: data?.solution_code || '',
+    });
+  } catch (error) {
+    return NextResponse.json({ error: 'Failed to fetch problem' }, { status: 500 });
   }
 }
