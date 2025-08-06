@@ -1,4 +1,5 @@
 'use client'
+
 import { useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
 
@@ -14,12 +15,12 @@ type Problem = {
   solution_code: string
 }
 
-
 export default function ChatPage() {
   const [input, setInput] = useState('')
   const [messages, setMessages] = useState<Message[]>([])
   const [loading, setLoading] = useState(false)
   const [problem, setProblem] = useState<Problem | null>(null)
+  const [gradingMode, setGradingMode] = useState(false)
   const bottomRef = useRef<HTMLDivElement | null>(null)
 
   const searchParams = useSearchParams()
@@ -43,9 +44,8 @@ export default function ChatPage() {
     setInput('')
     setLoading(true)
 
-    // 🔽 プロンプトに description / solution_code を含める
-    const contextPrompt = problem
-      ? `【問題文】\n${problem.description}\n\n【解答コード】\n${problem.solution_code}\n\n【質問】\n${input}`
+    const contextPrompt = gradingMode && problem
+      ? `次のプログラム課題に対して、以下の学生のコードを採点し、改善点とアドバイス、完成度（100点満点）を提示してください。\n\n【問題文】\n${problem.description}\n\n【模範解答】\n${problem.solution_code}\n\n【学生のコード】\n${input}\n\n---\nアドバイス:\n<ここに改善点や次にやるべきこと>\n\n点数:\n<ここに数値（例: 85点）>`
       : input
 
     try {
@@ -87,6 +87,27 @@ export default function ChatPage() {
         {problem ? `${problem.title}` : '問題を読み込み中...'}
       </h1>
 
+      {/* トグルスイッチ */}
+      <div className="flex items-center gap-2 mb-4">
+        <span className={gradingMode ? 'text-gray-400 text-sm' : 'text-black font-medium text-sm'}>
+          通常モード
+        </span>
+        <button
+          onClick={() => setGradingMode(!gradingMode)}
+          className={`w-12 h-6 flex items-center rounded-full p-1 transition-colors duration-300 ${
+            gradingMode ? 'bg-green-500' : 'bg-gray-300'
+          }`}
+        >
+          <div
+            className={`bg-white w-4 h-4 rounded-full shadow-md transform transition-transform duration-300 ${
+              gradingMode ? 'translate-x-6' : 'translate-x-0'
+            }`}
+          />
+        </button>
+        <span className={gradingMode ? 'text-black font-medium text-sm' : 'text-gray-400 text-sm'}>
+          採点モード
+        </span>
+      </div>
 
       <div className="flex-1 overflow-y-auto space-y-4 px-1 py-2">
         {messages.map((msg, idx) => (
