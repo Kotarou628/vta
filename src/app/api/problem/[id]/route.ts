@@ -36,8 +36,8 @@ export async function PUT(req: NextRequest) {
   }
 }
 
-export async function GET(_: NextRequest, { params }: { params: { id: string } }) {
-  const id = params.id;
+export async function GET(req: NextRequest, context: { params: { id: string } }) {
+  const { id } = context.params;
 
   if (!id) {
     return NextResponse.json({ error: 'Invalid ID' }, { status: 400 });
@@ -51,6 +51,8 @@ export async function GET(_: NextRequest, { params }: { params: { id: string } }
 
     const data = doc.data();
     return NextResponse.json({
+      id: doc.id,
+      title: data?.title || '',  // ← 🔑 title を追加！
       description: data?.description || '',
       solution_code: data?.solution_code || '',
     });

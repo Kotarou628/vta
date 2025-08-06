@@ -9,9 +9,11 @@ type Message = {
 
 type Problem = {
   id: string
+  title: string
   description: string
   solution_code: string
 }
+
 
 export default function ChatPage() {
   const [input, setInput] = useState('')
@@ -81,7 +83,10 @@ export default function ChatPage() {
 
   return (
     <main className="flex flex-col h-screen max-w-3xl mx-auto p-4">
-      <h1 className="text-2xl font-bold mb-4">ChatGPT風チャット</h1>
+      <h1 className="text-2xl font-bold mb-4">
+        {problem ? `${problem.title}` : '問題を読み込み中...'}
+      </h1>
+
 
       <div className="flex-1 overflow-y-auto space-y-4 px-1 py-2">
         {messages.map((msg, idx) => (
