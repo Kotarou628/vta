@@ -1,4 +1,4 @@
-//C:\Users\Admin\vta\src\app\chat\page.tsx
+// src/app/chat/page.tsx
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
@@ -89,9 +89,29 @@ export default function ChatPage() {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
+  function formatMessageContent(content: string): (string | { code: string })[] {
+    const codeBlockRegex = /```(?:[a-z]*)?\n([\s\S]*?)```/g
+    const parts: (string | { code: string })[] = []
+    let lastIndex = 0
+    let match: RegExpExecArray | null
+
+    while ((match = codeBlockRegex.exec(content))) {
+      const index = match.index
+      const code = match[1]
+      if (index > lastIndex) parts.push(content.slice(lastIndex, index))
+      parts.push({ code })
+      lastIndex = codeBlockRegex.lastIndex
+    }
+
+    if (lastIndex < content.length) {
+      parts.push(content.slice(lastIndex))
+    }
+    return parts
+  }
+
   return (
     <main className="flex h-screen">
-      {/* 左側のサイドバー */}
+      {/* Sidebar */}
       <div className="w-1/3 bg-gray-50 border-r overflow-y-auto p-4">
         <h2 className="font-bold mb-2">問題を選択してください</h2>
         {problems.map((p) => (
@@ -105,11 +125,10 @@ export default function ChatPage() {
         ))}
       </div>
 
-      {/* 右側のチャット画面 */}
+      {/* Chat section */}
       <div className="flex flex-col flex-1 p-4">
         <h1 className="text-xl font-bold mb-2">{problem ? problem.title : '問題未選択'}</h1>
 
-        {/* モード切り替え */}
         <div className="flex items-center space-x-2 mb-4">
           <span className={!gradingMode ? 'font-bold' : 'text-gray-400'}>通常モード</span>
           <label className="relative inline-flex items-center cursor-pointer">
@@ -125,14 +144,12 @@ export default function ChatPage() {
           <span className={gradingMode ? 'font-bold' : 'text-gray-400'}>採点モード</span>
         </div>
 
-        {/* 問題未選択時の案内 */}
         {!problem && (
           <div className="mb-4 p-4 bg-yellow-100 text-yellow-800 rounded">
             まず左の一覧から問題を選択してください。選択後、質問やコードを入力できます。
           </div>
         )}
 
-        {/* チャット表示 */}
         <div className="flex-1 overflow-y-auto space-y-4">
           {messages.map((msg, idx) => (
             <div
@@ -141,17 +158,26 @@ export default function ChatPage() {
             >
               <div
                 className={`p-3 rounded-lg whitespace-pre-wrap break-words max-w-[75%] ${
-                  msg.role === 'user' ? 'bg-blue-100 text-right' : 'bg-gray-100 text-left'
+                  msg.role === 'user' ? 'bg-blue-100 ml-auto' : 'bg-green-50 mr-auto'
                 }`}
               >
-                {msg.content}
+                {formatMessageContent(msg.content).map((part, i) =>
+                  typeof part === 'string' ? (
+                    <p key={i} className="mb-2 text-left">{part}</p>
+                  ) : (
+                    <pre
+                      key={i}
+                      className="overflow-x-auto bg-gray-200 text-sm p-2 rounded mb-2 text-left"
+                    >
+                      <code className="text-left">{part.code}</code>
+                    </pre>
+                  )
+                )}
               </div>
             </div>
           ))}
           <div ref={bottomRef} />
         </div>
-
-        {/* 入力欄 */}
         <div className="mt-4">
           <textarea
             className="w-full border p-2 rounded resize-none h-24"
