@@ -1,7 +1,25 @@
 // src/app/chat/page.tsx
+// src/app/chat/page.tsx
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
+
+// ===== 短い教員/採点プロンプト（先頭に付与するだけ） =====
+const TEACHER_PROMPT = `
+[役割] プログラミングを正しく教えられる教員。
+[禁止] 解答コードは絶対に出さない（必要最小限の断片は可）。
+[方針] 逆質問（ソクラテス式）でヒント提示。
+[出力] 簡潔に、質問にだけ答える（最大5行）。`.trim()
+
+const GRADING_PROMPT = `
+[役割] 教員として採点・助言を行う。
+[比較] 模範コードと学生コードを比較し、未達箇所を抽出。
+[出力]
+1) 完成度: XX%（根拠を短く）
+2) 未達/不正確: 問題文の該当箇所を指摘（短く列挙）
+3) 次の一手: 次に実装/修正すべき箇所を1〜3点
+4) 良ければ短くほめる
+[禁止] 模範コードの全文貼付は禁止。`.trim()
 
 // Type definitions
 type Message = {
@@ -25,7 +43,7 @@ export default function ChatPage() {
   const [gradingMode, setGradingMode] = useState(false)
   const bottomRef = useRef<HTMLDivElement | null>(null)
 
-  // Load problems and chat history from localStorage
+  // 問題一覧とローカル履歴の読み込み
   useEffect(() => {
     const fetchProblems = async () => {
       const res = await fetch('/api/problem')
@@ -41,7 +59,7 @@ export default function ChatPage() {
     fetchProblems()
   }, [])
 
-  // Save chat history to localStorage when updated
+  // 問題別のチャット履歴を localStorage に保存
   useEffect(() => {
     localStorage.setItem('chatMessages', JSON.stringify(allMessages))
   }, [allMessages])
@@ -51,16 +69,18 @@ export default function ChatPage() {
   const handleSend = async () => {
     if (!input.trim() || !problem) return
 
+    // 送信メッセージを現在選択中の問題IDのスレッドに保存
     const userMessage: Message = { role: 'user', content: input }
     const updatedMessages = [...(allMessages[problem.id] || []), userMessage]
     setAllMessages({ ...allMessages, [problem.id]: updatedMessages })
     setInput('')
     setLoading(true)
 
+    // 教員モード/採点モードの指示を先頭に付与し、問題文・模範コード・入力を含めて送信
     const contextPrompt =
       gradingMode
-        ? `次のプログラム課題に対して、以下の学生のコードを採点し、改善点とアドバイス、完成度（100点満点）を提示してください。\n\n【問題文】\n${problem.description}\n\n【模範解答】\n${problem.solution_code}\n\n【学生のコード】\n${input}\n\n---\nアドバイス:\n<ここに改善点や次にやるべきこと>\n\n点数:\n<ここに数値（例: 85点）>`
-        : `以下のプログラミング課題に関する質問です。\n\n【問題文】\n${problem.description}\n\n【模範解答】\n${problem.solution_code}\n\n【質問】\n${input}`
+        ? `${GRADING_PROMPT}\n\n【問題文】\n${problem.description}\n\n【模範コード】\n${problem.solution_code}\n\n【学生のコード】\n${userMessage.content}`
+        : `${TEACHER_PROMPT}\n\n【問題文】\n${problem.description}\n\n【模範コード】\n${problem.solution_code}\n\n【質問/学生の考え】\n${userMessage.content}`
 
     try {
       const res = await fetch('/api/chat', {
@@ -74,6 +94,9 @@ export default function ChatPage() {
         ...prev,
         [problem.id]: [...(prev[problem.id] || []), assistantMessage]
       }))
+
+      // 念のため即時スクロール
+      setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' }), 0)
     } catch (e) {
       const errorMessage: Message = { role: 'assistant', content: 'エラーが発生しました。' }
       setAllMessages((prev) => ({
@@ -89,6 +112,7 @@ export default function ChatPage() {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
+  // ```コードブロック``` を検出してそのまま表示する（インデント・空白を保持）
   function formatMessageContent(content: string): (string | { code: string })[] {
     const codeBlockRegex = /```(?:[a-z]*)?\n([\s\S]*?)```/g
     const parts: (string | { code: string })[] = []
@@ -158,7 +182,9 @@ export default function ChatPage() {
             >
               <div
                 className={`p-3 rounded-lg whitespace-pre-wrap break-words max-w-[75%] ${
-                  msg.role === 'user' ? 'bg-blue-100 ml-auto' : 'bg-green-50 mr-auto'
+                  msg.role === 'user'
+                    ? 'bg-blue-100 ml-auto'      // ユーザー: 青系（右寄せ）
+                    : 'bg-green-50 mr-auto'      // アシスタント: 緑系（左寄せ）
                 }`}
               >
                 {formatMessageContent(msg.content).map((part, i) =>
@@ -178,6 +204,7 @@ export default function ChatPage() {
           ))}
           <div ref={bottomRef} />
         </div>
+
         <div className="mt-4">
           <textarea
             className="w-full border p-2 rounded resize-none h-24"
