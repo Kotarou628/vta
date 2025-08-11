@@ -1,15 +1,17 @@
 // src/app/api/chat/route.ts
-import { NextRequest, NextResponse } from 'next/server'
+import { NextRequest } from 'next/server'
+
+export const runtime = 'edge' // Edge Functions を有効にする
 
 export async function POST(req: NextRequest) {
   const { message } = await req.json()
 
   const apiKey = process.env.OPENAI_API_KEY
   if (!apiKey) {
-    return NextResponse.json({ error: 'OpenAI APIキーが未設定です' }, { status: 500 })
+    return new Response('OpenAI APIキーが未設定です', { status: 500 })
   }
 
-  const openaiRes = await fetch('https://api.openai.com/v1/chat/completions', {
+  const response = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -17,16 +19,17 @@ export async function POST(req: NextRequest) {
     },
     body: JSON.stringify({
       model: 'gpt-4o-mini',
-      messages: [{ role: 'user', content: message }],
+      stream: true,
+      messages: [
+        { role: 'system', content: 'あなたは学習者に思考を促す質問を投げかけるプロのプログラミング教員です。' },
+        { role: 'user', content: message },
+      ],
     }),
   })
 
-  const data = await openaiRes.json()
-  const reply = data.choices?.[0]?.message?.content ?? '応答が取得できませんでした'
-
-  return NextResponse.json({ reply })
+  return new Response(response.body, {
+    headers: {
+      'Content-Type': 'text/event-stream',
+    },
+  })
 }
-// このコードは、OpenAIのAPIを使用してチャット応答を生成するためのエンドポイントを定義しています。
-// POSTリクエストを受け取り、リクエストボディからメッセージを取得します。
-// OpenAIのAPIキーが設定されていない場合はエラーレスポンスを返します。
-// OpenAIのAPIにリクエストを送り、応答を取得します。
