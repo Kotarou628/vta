@@ -1,3 +1,4 @@
+//C:\Users\Admin\vta\src\app\chat\page.tsx
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
@@ -33,7 +34,6 @@ export default function ChatPage() {
   useEffect(() => {
     const saved = localStorage.getItem('chatMessages')
     if (saved) setAllMessages(JSON.parse(saved))
-
     fetch('/api/problem')
       .then(res => res.json())
       .then(setProblems)
@@ -43,20 +43,30 @@ export default function ChatPage() {
     localStorage.setItem('chatMessages', JSON.stringify(allMessages))
   }, [allMessages])
 
-  const messages = problem ? allMessages[problem.id] || [] : []
+  const messages: Message[] = problem ? allMessages[problem.id] || [] : []
+
+  const buildSummary = (messages: Message[]) => {
+    const summaryLimit = 500
+    const userMessages = messages.filter(m => m.role === 'user').map(m => m.content).join('\n')
+    return userMessages.length > summaryLimit
+      ? userMessages.slice(-summaryLimit)
+      : userMessages
+  }
 
   const handleSend = async () => {
     if (!input.trim() || !problem) return
 
     const userMessage: Message = { role: 'user', content: input }
-    const newMessages = [...(allMessages[problem.id] || []), userMessage]
-    setAllMessages({ ...allMessages, [problem.id]: newMessages })
+    const currentMessages = [...(allMessages[problem.id] || []), userMessage]
+    setAllMessages({ ...allMessages, [problem.id]: currentMessages })
     setInput('')
     setLoading(true)
 
+    const summary = buildSummary(currentMessages)
+
     const contextPrompt = gradingMode
       ? `${GRADING_PROMPT}\n\n【問題文】\n${problem.description}\n\n【模範コード】\n${problem.solution_code}\n\n【学生のコード】\n${userMessage.content}`
-      : `${TEACHER_PROMPT}\n\n【問題文】\n${problem.description}\n\n【模範コード】\n${problem.solution_code}\n\n【質問/学生の考え】\n${userMessage.content}`
+      : `${TEACHER_PROMPT}\n\n【問題文】\n${problem.description}\n\n【模範コード】\n${problem.solution_code}\n\n【これまでの履歴要約】\n${summary}\n\n【質問/学生の考え】\n${userMessage.content}`
 
     try {
       const res = await fetch('/api/chat', {
@@ -71,10 +81,9 @@ export default function ChatPage() {
 
       let assistantText = ''
       const newAssistantMessage: Message = { role: 'assistant', content: '' }
-
       setAllMessages(prev => ({
         ...prev,
-        [problem.id]: [...(prev[problem.id] || []), newAssistantMessage]
+        [problem.id]: [...(prev[problem.id] || []), newAssistantMessage],
       }))
 
       while (true) {
@@ -82,12 +91,12 @@ export default function ChatPage() {
         if (done) break
 
         const chunk = decoder.decode(value, { stream: true })
-        const lines = chunk.split('\n').filter(line => line.startsWith('data: '))
+        const lines = chunk.split('\n')
+          .filter(line => line.trim().startsWith('data: '))
+          .map(line => line.replace(/^data: /, ''))
+          .filter(line => line !== '' && line !== '[DONE]')
 
-        for (const line of lines) {
-          const jsonStr = line.replace(/^data: /, '')
-          if (jsonStr === '[DONE]') break
-
+        for (const jsonStr of lines) {
           try {
             const parsed = JSON.parse(jsonStr)
             const delta = parsed.choices?.[0]?.delta?.content
@@ -101,6 +110,7 @@ export default function ChatPage() {
             }
           } catch (err) {
             console.error('ストリームJSON解析エラー:', err)
+            console.warn('壊れたJSON:', jsonStr)
           }
         }
       }
@@ -117,7 +127,6 @@ export default function ChatPage() {
       setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' }), 0)
     }
   }
-
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -161,7 +170,7 @@ export default function ChatPage() {
         </div>
 
         <div className="flex-1 space-y-4 overflow-y-auto">
-          {messages.map((msg, idx) => (
+          {messages.map((msg: Message, idx: number) => (
             <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
               <div className={`p-3 rounded max-w-[75%] whitespace-pre-wrap break-words ${msg.role === 'user' ? 'bg-blue-100' : 'bg-green-50'}`}>
                 {formatMessageContent(msg.content).map((part, i) =>
