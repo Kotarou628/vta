@@ -35,9 +35,9 @@ export async function PUT(req: NextRequest) {
   }
 }
 
-// GET (型を省略 or 自定義)
-export async function GET(_req: NextRequest, context: { params: { id: string } }) {
-  const id = context.params.id;
+// GET (修正が必要: 型注釈を削除)
+export async function GET(_req, { params }) {
+  const id = params.id;
 
   if (!id) {
     return NextResponse.json({ error: 'Invalid ID' }, { status: 400 });
