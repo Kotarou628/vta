@@ -2,7 +2,6 @@
 import { db } from '@/lib/firebase-admin';
 import { NextRequest, NextResponse } from 'next/server';
 
-// FirestoreのドキュメントIDは文字列
 // DELETE: 問題を削除
 export async function DELETE(req: NextRequest) {
   const id = req.nextUrl.pathname.split('/').pop(); // /api/problem/[id]
@@ -36,7 +35,11 @@ export async function PUT(req: NextRequest) {
   }
 }
 
-export async function GET(req: NextRequest, context: { params: { id: string } }) {
+// GET: 問題を取得
+export async function GET(
+  _req: NextRequest,
+  context: { params: { id: string } }
+) {
   const { id } = context.params;
 
   if (!id) {
@@ -45,14 +48,16 @@ export async function GET(req: NextRequest, context: { params: { id: string } })
 
   try {
     const doc = await db.collection('problem').doc(id).get();
+
     if (!doc.exists) {
       return NextResponse.json({ error: 'Not Found' }, { status: 404 });
     }
 
     const data = doc.data();
+
     return NextResponse.json({
       id: doc.id,
-      title: data?.title || '',  // ← 🔑 title を追加！
+      title: data?.title || '',
       description: data?.description || '',
       solution_code: data?.solution_code || '',
     });
