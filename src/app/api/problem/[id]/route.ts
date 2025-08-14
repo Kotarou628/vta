@@ -2,15 +2,19 @@
 import { db } from '@/lib/firebase-admin'
 import { NextRequest, NextResponse } from 'next/server'
 
-// ---- GET: 問題を取得 ----
-export async function GET(req: NextRequest, context: any) {
-  try {
-    const id: string | undefined =
-      context?.params?.id ??
-      req.nextUrl.searchParams.get('id') ??
-      req.nextUrl.pathname.split('/').pop() ??
-      undefined
+/** URL から [id] を取り出す共通関数（末尾スラッグを採用） */
+function extractId(req: NextRequest): string | null {
+  // /api/problem/xxx の xxx を取得
+  const slug = req.nextUrl.pathname.split('/').pop()
+  // searchParams ?id=xxx をフォールバックとして許可
+  const q = req.nextUrl.searchParams.get('id')
+  return (slug && slug.length > 0 ? slug : null) ?? (q && q.length > 0 ? q : null)
+}
 
+/** ---- GET: 問題を取得 ---- */
+export async function GET(req: NextRequest) {
+  try {
+    const id = extractId(req)
     if (!id) {
       return NextResponse.json({ error: 'Invalid ID' }, { status: 400 })
     }
@@ -23,9 +27,9 @@ export async function GET(req: NextRequest, context: any) {
     const data = doc.data()
     return NextResponse.json({
       id: doc.id,
-      title: data?.title || '',
-      description: data?.description || '',
-      solution_code: data?.solution_code || '',
+      title: data?.title ?? '',
+      description: data?.description ?? '',
+      solution_code: data?.solution_code ?? '',
     })
   } catch (e) {
     console.error('GET /api/problem/[id] failed:', e)
@@ -33,15 +37,10 @@ export async function GET(req: NextRequest, context: any) {
   }
 }
 
-// ---- PUT: 問題を更新 ----
-export async function PUT(req: NextRequest, context: any) {
+/** ---- PUT: 問題を更新 ---- */
+export async function PUT(req: NextRequest) {
   try {
-    const id: string | undefined =
-      context?.params?.id ??
-      req.nextUrl.searchParams.get('id') ??
-      req.nextUrl.pathname.split('/').pop() ??
-      undefined
-
+    const id = extractId(req)
     if (!id) {
       return NextResponse.json({ error: 'Invalid ID' }, { status: 400 })
     }
@@ -55,15 +54,10 @@ export async function PUT(req: NextRequest, context: any) {
   }
 }
 
-// ---- DELETE: 問題を削除 ----
-export async function DELETE(req: NextRequest, context: any) {
+/** ---- DELETE: 問題を削除 ---- */
+export async function DELETE(req: NextRequest) {
   try {
-    const id: string | undefined =
-      context?.params?.id ??
-      req.nextUrl.searchParams.get('id') ??
-      req.nextUrl.pathname.split('/').pop() ??
-      undefined
-
+    const id = extractId(req)
     if (!id) {
       return NextResponse.json({ error: 'Invalid ID' }, { status: 400 })
     }
