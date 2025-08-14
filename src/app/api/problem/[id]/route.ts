@@ -1,11 +1,10 @@
 // src/app/api/problem/[id]/route.ts
-// src/app/api/problem/[id]/route.ts
 import { db } from '@/lib/firebase-admin';
 import { NextRequest, NextResponse } from 'next/server';
 
-// DELETE: 問題を削除
+// DELETE
 export async function DELETE(req: NextRequest) {
-  const id = req.nextUrl.pathname.split('/').pop(); // /api/problem/[id]
+  const id = req.nextUrl.pathname.split('/').pop();
 
   if (!id) {
     return NextResponse.json({ error: 'Invalid ID' }, { status: 400 });
@@ -19,7 +18,7 @@ export async function DELETE(req: NextRequest) {
   }
 }
 
-// PUT: 問題を更新
+// PUT
 export async function PUT(req: NextRequest) {
   const id = req.nextUrl.pathname.split('/').pop();
   const data = await req.json();
@@ -36,12 +35,9 @@ export async function PUT(req: NextRequest) {
   }
 }
 
-// GET: 問題を取得
-export async function GET(
-  _req: NextRequest,
-  context: { params: { id: string } }
-) {
-  const id = context.params?.id;
+// GET (型を省略 or 自定義)
+export async function GET(_req: NextRequest, context: { params: { id: string } }) {
+  const id = context.params.id;
 
   if (!id) {
     return NextResponse.json({ error: 'Invalid ID' }, { status: 400 });
