@@ -1,7 +1,7 @@
-//C:\Users\Admin\vta\src\app\chat\page.tsx
+// src/app/chat/page.tsx
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 const TEACHER_PROMPT = `
 [役割] プログラミングを正しく教えられる教員。
@@ -43,7 +43,11 @@ export default function ChatPage() {
     localStorage.setItem('chatMessages', JSON.stringify(allMessages))
   }, [allMessages])
 
-  const messages: Message[] = problem ? allMessages[problem.id] || [] : []
+  // ★ 依存が安定するようにメモ化（機能は変わりません）
+  const messages: Message[] = useMemo(
+    () => (problem ? allMessages[problem.id] || [] : []),
+    [problem, allMessages]
+  )
 
   const buildSummary = (messages: Message[]) => {
     const summaryLimit = 500
