@@ -35,9 +35,12 @@ export async function PUT(req: NextRequest) {
   }
 }
 
-// GET (修正が必要: 型注釈を削除)
-export async function GET(_req, { params }) {
-  const id = params.id;
+// GET
+export async function GET(
+  _req: NextRequest,
+  context: { params: { id: string } }
+) {
+  const id = context.params.id;
 
   if (!id) {
     return NextResponse.json({ error: 'Invalid ID' }, { status: 400 });
@@ -59,6 +62,9 @@ export async function GET(_req, { params }) {
       solution_code: data?.solution_code || '',
     });
   } catch (error) {
-    return NextResponse.json({ error: 'Failed to fetch problem' }, { status: 500 });
+    return NextResponse.json(
+      { error: 'Failed to fetch problem' },
+      { status: 500 }
+    );
   }
 }
