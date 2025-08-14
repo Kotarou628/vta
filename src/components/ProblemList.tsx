@@ -1,14 +1,23 @@
 //C:\Users\Admin\vta\src\components\ProblemList.tsx
 'use client'
 
-import { DndContext, closestCenter, PointerSensor, useSensor, useSensors } from '@dnd-kit/core'
+import {
+  DndContext,
+  closestCenter,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+  type UniqueIdentifier,
+} from '@dnd-kit/core'
 import {
   arrayMove,
   SortableContext,
   useSortable,
-  verticalListSortingStrategy
+  verticalListSortingStrategy,
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
+import type { CSSProperties } from 'react'
 
 /** 型定義 */
 type Problem = {
@@ -59,25 +68,20 @@ function SortableItem({
   handleUpdate: (id: string) => void
   handleDelete: (id: string) => void
 }) {
-  const { attributes, listeners, setNodeRef, transform, transition } = useSortable({ id: problem.id })
+  const { attributes, listeners, setNodeRef, transform, transition } = useSortable({
+    id: problem.id as UniqueIdentifier,
+  })
 
-  const style = {
+  const style: CSSProperties = {
     transform: CSS.Transform.toString(transform),
     transition,
   }
 
   return (
-    <li
-      ref={setNodeRef}
-      style={style}
-      className="border p-4 rounded bg-gray-100"
-    >
-      {/* 全体にクリック可能にする */}
+    <li ref={setNodeRef} style={style} className="border p-4 rounded bg-gray-100">
       <div onClick={() => toggleExpand(problem)} className="cursor-pointer">
         <div className="flex justify-between items-center">
           <span className="font-semibold text-lg text-blue-800">{problem.title}</span>
-
-          {/* ドラッグハンドルだけにリスナーを適用 */}
           <span
             {...attributes}
             {...listeners}
@@ -123,26 +127,33 @@ function SortableItem({
         </div>
       )}
     </li>
-
   )
 }
 
 export default function ProblemList(props: ProblemListProps) {
   const sensors = useSensors(useSensor(PointerSensor))
 
-  const handleDragEnd = (event: any) => {
+  const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event
-    if (!over || active.id === over.id) return
+    if (!over) return
 
-    const oldIndex = props.problems.findIndex((p) => p.id === active.id)
-    const newIndex = props.problems.findIndex((p) => p.id === over.id)
+    const activeId = String(active.id)
+    const overId = String(over.id)
+    if (activeId === overId) return
+
+    const oldIndex = props.problems.findIndex((p) => p.id === activeId)
+    const newIndex = props.problems.findIndex((p) => p.id === overId)
+    if (oldIndex === -1 || newIndex === -1) return
+
     const newList = arrayMove(props.problems, oldIndex, newIndex)
     props.onReorder(newList)
   }
 
+  const items: UniqueIdentifier[] = props.problems.map((p) => p.id)
+
   return (
     <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-      <SortableContext items={props.problems.map((p) => p.id)} strategy={verticalListSortingStrategy}>
+      <SortableContext items={items} strategy={verticalListSortingStrategy}>
         <ul className="space-y-4">
           {props.problems.map((p) => (
             <SortableItem
