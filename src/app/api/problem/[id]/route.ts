@@ -1,7 +1,7 @@
 // src/app/api/problem/[id]/route.ts
+// src/app/api/problem/[id]/route.ts
 import { db } from '@/lib/firebase-admin';
 import { NextRequest, NextResponse } from 'next/server';
-import { type RouteContext } from 'next/dist/server/future/route-modules/app-route/module';
 
 // DELETE: 問題を削除
 export async function DELETE(req: NextRequest) {
@@ -39,7 +39,7 @@ export async function PUT(req: NextRequest) {
 // GET: 問題を取得
 export async function GET(
   _req: NextRequest,
-  context: RouteContext
+  context: { params: { id: string } }
 ) {
   const id = context.params?.id;
 
