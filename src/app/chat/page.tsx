@@ -161,7 +161,7 @@ export default function ChatPage() {
       </div>
 
       <div className="flex-1 p-4 flex flex-col">
-        <h1 className="text-xl font-bold mb-2">{problem?.title || '問題未選択'}</h1>
+        <h1 className="text-xl font-bold mb-2">{problem?.title || 'これはdev'}</h1>
 
         <div className="flex items-center mb-4">
           <span className={!gradingMode ? 'font-bold' : 'text-gray-400'}>通常モード</span>
