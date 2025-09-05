@@ -2,6 +2,7 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
+import Link from 'next/link' // ← 追加
 
 const TEACHER_PROMPT = `
 [役割] プログラミングを正しく教えられる教員。
@@ -19,7 +20,6 @@ const GRADING_PROMPT = `
 - すべて正しく実装されていた場合は、「あなたのコードは完璧です。」とだけ表示
 [禁止] 模範コードの全文貼付は禁止。
 [追加] 現時点のコードに対して簡単なテストコードも提示（部分的でよい）`.trim()
-
 
 type Message = { role: 'user' | 'assistant', content: string }
 type Problem = { id: string, title: string, description: string, solution_code: string }
@@ -156,19 +156,37 @@ export default function ChatPage() {
       <div className="w-1/3 bg-gray-50 border-r p-4 overflow-y-auto">
         <h2 className="font-bold mb-2">問題を選択</h2>
         {problems.map(p => (
-          <button key={p.id} onClick={() => setProblem(p)} className={`block w-full text-left p-2 mb-2 rounded ${problem?.id === p.id ? 'bg-blue-100' : 'hover:bg-blue-50'}`}>
+          <button
+            key={p.id}
+            onClick={() => setProblem(p)}
+            className={`block w-full text-left p-2 mb-2 rounded ${problem?.id === p.id ? 'bg-blue-100' : 'hover:bg-blue-50'}`}
+          >
             {p.title}
           </button>
         ))}
       </div>
 
       <div className="flex-1 p-4 flex flex-col">
-        <h1 className="text-xl font-bold mb-2">{problem?.title || '問題未選択'}</h1>
+        {/* タイトル + ユーザ情報を変更ボタン */}
+        <div className="flex items-center justify-between mb-2">
+          <h1 className="text-xl font-bold">{problem?.title || '問題未選択'}</h1>
+          <Link
+            href="/settings"
+            className="border px-3 py-1 rounded text-sm hover:bg-gray-50"
+          >
+            ユーザ情報を変更
+          </Link>
+        </div>
 
         <div className="flex items-center mb-4">
           <span className={!gradingMode ? 'font-bold' : 'text-gray-400'}>通常モード</span>
           <label className="mx-2 relative inline-flex items-center cursor-pointer">
-            <input type="checkbox" className="sr-only peer" checked={gradingMode} onChange={e => setGradingMode(e.target.checked)} />
+            <input
+              type="checkbox"
+              className="sr-only peer"
+              checked={gradingMode}
+              onChange={e => setGradingMode(e.target.checked)}
+            />
             <div className="w-11 h-6 bg-gray-200 rounded-full peer peer-checked:bg-green-500 transition-all" />
             <div className="absolute left-0.5 top-0.5 w-5 h-5 bg-white rounded-full shadow peer-checked:translate-x-full transition-all" />
           </label>
@@ -205,7 +223,11 @@ export default function ChatPage() {
             disabled={!problem}
           />
           <div className="flex justify-end mt-2">
-            <button className="bg-blue-600 text-white px-4 py-2 rounded disabled:opacity-50" onClick={handleSend} disabled={!input || loading || !problem}>
+            <button
+              className="bg-blue-600 text-white px-4 py-2 rounded disabled:opacity-50"
+              onClick={handleSend}
+              disabled={!input || loading || !problem}
+            >
               {loading ? '送信中...' : '送信'}
             </button>
           </div>
