@@ -1,4 +1,3 @@
-//C:\Users\Admin\vta\src\app\login\page.tsx
 // src/app/login/page.tsx
 'use client';
 
@@ -9,9 +8,22 @@ import { signInWithEmailAndPassword } from 'firebase/auth';
 import { auth } from '@/lib/firebase';
 import { idToEmail } from '@/lib/nameToEmail';
 
+/** 席番号の正規化（全角→半角、英字大文字化、前後空白除去） */
+const normalizeSeat = (raw: string) =>
+  raw
+    .replace(/[Ａ-Ｚａ-ｚ０-９]/g, (s) =>
+      String.fromCharCode(s.charCodeAt(0) - 0xfee0)
+    )
+    .trim()
+    .toUpperCase();
+
+/** A〜L + 01〜08 の形式だけ許可（必要なら範囲を調整） */
+const isValidSeat = (seat: string) => /^[A-L](0[1-8])$/.test(seat);
+
 export default function LoginPage() {
   const router = useRouter();
   const [studentId, setStudentId] = useState('');
+  const [seat, setSeat] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -21,9 +33,26 @@ export default function LoginPage() {
     setLoading(true);
     setError('');
 
+    const seatNormalized = normalizeSeat(seat);
+
+    if (!isValidSeat(seatNormalized)) {
+      setLoading(false);
+      setError('席番号は A01〜L08 の形式で入力してください。');
+      return;
+    }
+
     try {
       const email = idToEmail(studentId.trim());
       await signInWithEmailAndPassword(auth, email, password);
+
+      // 席番号をクライアント/サーバーの両方に保存
+      sessionStorage.setItem('seat', seatNormalized);
+      await fetch('/api/session/seat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ seat: seatNormalized }),
+      });
+
       // ✅ ログイン成功でチャットへ
       router.push('/chat');
     } catch {
@@ -33,30 +62,52 @@ export default function LoginPage() {
     }
   };
 
+  const seatHelp =
+    seat && !isValidSeat(normalizeSeat(seat))
+      ? '例: A01 / B08（英字+2桁）。全角でもOK。'
+      : '';
+
   return (
     <main className="max-w-md mx-auto p-6">
       <h1 className="text-2xl font-bold mb-4">ログイン</h1>
       <form onSubmit={handleLogin} className="space-y-4">
         <div>
-          <label>学籍番号</label>
+          <label className="block text-sm mb-1">学籍番号</label>
           <input
             type="text"
             value={studentId}
             onChange={(e) => setStudentId(e.target.value)}
-            className="w-full border p-2"
+            className="w-full border p-2 rounded"
             required
           />
         </div>
+
         <div>
-          <label>パスワード</label>
+          <label className="block text-sm mb-1">席番号（A01 など）</label>
+          <input
+            type="text"
+            value={seat}
+            onChange={(e) => setSeat(e.target.value)}
+            onBlur={(e) => setSeat(normalizeSeat(e.target.value))}
+            placeholder="A01"
+            inputMode="text"
+            className="w-full border p-2 rounded"
+            required
+          />
+          {seatHelp && <p className="text-xs text-gray-500 mt-1">{seatHelp}</p>}
+        </div>
+
+        <div>
+          <label className="block text-sm mb-1">パスワード</label>
           <input
             type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            className="w-full border p-2"
+            className="w-full border p-2 rounded"
             required
           />
         </div>
+
         <button
           type="submit"
           className="bg-blue-600 text-white px-4 py-2 rounded disabled:opacity-50"
