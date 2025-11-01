@@ -1,3 +1,4 @@
+// C:\Users\Admin\vta\src\app\chat\page.tsx
 'use client'
 
 import React, { useEffect, useMemo, useRef, useState, ReactNode, forwardRef, useImperativeHandle } from 'react'
@@ -39,14 +40,12 @@ const AutoGrowTextarea = forwardRef<HTMLTextAreaElement, AutoGrowProps>(function
         fit()
         onInput?.(e)
       }}
-      className={
-        [
-          'w-full border rounded font-mono leading-6 shadow-inner',
-          'min-h-[10rem] resize-y overflow-auto',
-          'focus:outline-none focus:ring-2 focus:ring-blue-400',
-          className
-        ].join(' ')
-      }
+      className={[
+        'w-full border rounded font-mono leading-6 shadow-inner',
+        'min-h-[10rem] resize-y overflow-auto',
+        'focus:outline-none focus:ring-2 focus:ring-blue-400',
+        className
+      ].join(' ')}
       {...rest}
     />
   )
@@ -55,7 +54,7 @@ const AutoGrowTextarea = forwardRef<HTMLTextAreaElement, AutoGrowProps>(function
 /* ================== 教員プロンプト群（既存） ================== */
 /**
  * 教員モードのベースプロンプト（抽象度は「型は抽象語・識別子は問題準拠」）
- * テンプレ内のコードフェンスは \` でエスケープ（```）する。
+ * テンプレ内のコードフェンスは ` でエスケープ（```）する。
  * ★模範コード（solution_code）に示された抽象度・記法に厳密準拠★
  */
 const BASE_TEACHER_PROMPT = (lang: string) => String.raw`
@@ -79,7 +78,7 @@ const BASE_TEACHER_PROMPT = (lang: string) => String.raw`
 - **識別子は問題/模範コードで明示されたもののみ**使う（例: id, name, subject, score, Person1）。
 - 配列リテラルは**形だけ**を示す（{ "<要素1>", "<要素2>" } / { <要素1>, <要素2> }）。  
   "math", "english", 0 といった具体値は出さない。
-- **記法は模範コードに合わせる**：例）subject/score の初期化は \`{...}\` リテラルのみ。\`new String[]{...}\` のように**別記法へ変更しない**。
++ - **記法は模範コードに合わせる**：例）subject/score の初期化は \`{...}\` リテラルのみ。\`new String[]{...}\` のように**別記法へ変更しない**。
 - 模範コードに無い修飾（public/private 等）や順序変更をしない。**順序と行構造を尊重**する。
 
 [抽象度逸脱の扱い]
@@ -335,10 +334,24 @@ export default function ChatPage() {
   const [gradingMode, setGradingMode] = useState(false)
   const bottomRef = useRef<HTMLDivElement | null>(null)
 
-  // 全画面エディタ
-  const [fullscreen, setFullscreen] = useState(false)
-  const inputRef = useRef<HTMLTextAreaElement | null>(null)
-  const fullscreenRef = useRef<HTMLTextAreaElement | null>(null)
+  // 継続時間トラッキング
+  const [selectStartedAt, setSelectStartedAt] = useState<number | null>(null)
+  const [elapsedSec, setElapsedSec] = useState(0)
+  const [nudgeCount, setNudgeCount] = useState(0)
+  const pad2 = (n: number) => n.toString().padStart(2, '0')
+  const fmtHMS = (sec: number) => {
+    const h = Math.floor(sec / 3600)
+    const m = Math.floor((sec % 3600) / 60)
+    const s = sec % 60
+    return (h > 0 ? `${h}:${pad2(m)}` : `${m}`) + `:${pad2(s)}`
+  }
+  const pushAssistant = (text: string) => {
+    if (!problem) return
+    setAllMessages(prev => {
+      const cur = prev[problem.id] || []
+      return { ...prev, [problem.id]: [...cur, { role: 'assistant', content: text }] }
+    })
+  }
 
   // ガイドフォーム
   const [openHint, setOpenHint] = useState(false)
@@ -372,6 +385,41 @@ export default function ChatPage() {
     const userText = msgs.filter((m) => m.role === 'user').map((m) => m.content).join('\n')
     return userText.length > summaryLimit ? userText.slice(-summaryLimit) : userText
   }
+
+  // 問題切替時の開始時刻を保持
+  useEffect(() => {
+    if (!problem) {
+      setSelectStartedAt(null)
+      setElapsedSec(0)
+      setNudgeCount(0)
+      return
+    }
+    const key = `selStart:${problem.id}`
+    const saved = localStorage.getItem(key)
+    const start = saved ? Number(saved) : Date.now()
+    setSelectStartedAt(start)
+    localStorage.setItem(key, String(start))
+    setNudgeCount(0)
+  }, [problem])
+
+  // 1秒タイマー＆声かけ
+  useEffect(() => {
+    if (!problem || !selectStartedAt) return
+    const id = setInterval(() => {
+      const sec = Math.floor((Date.now() - selectStartedAt) / 1000)
+      setElapsedSec(sec)
+
+      if (sec >= 20 * 60 && nudgeCount === 0) {
+        pushAssistant('20分間取り組んでいますね。何かわからないことがあれば何でも質問してください。')
+        setNudgeCount(1)
+      }
+      if (sec >= 30 * 60 && nudgeCount === 1) {
+        pushAssistant('悩んでいる様子です。TAを呼んで一緒に解決しましょう。私に聞いても大丈夫です。')
+        setNudgeCount(2)
+      }
+    }, 1000)
+    return () => clearInterval(id)
+  }, [problem, selectStartedAt, nudgeCount])
 
   /** 送信共通処理 */
   const sendWithContext = async (userContent: string) => {
@@ -419,7 +467,7 @@ export default function ChatPage() {
           .map((l) => l.replace(/^data: /, ''))
           .filter((l) => l !== '' && l !== '[DONE]')
 
-      for (const jsonStr of lines) {
+        for (const jsonStr of lines) {
           try {
             const parsed = JSON.parse(jsonStr)
             const delta = parsed.choices?.[0]?.delta?.content
@@ -505,18 +553,17 @@ export default function ChatPage() {
   const hintEmpty = !hintQuestion.trim() && !hintCode.trim() && !hintContext.trim()
   const errEmpty = !errWhere.trim() && !errMessage.trim() && !errCode.trim() && !errThought.trim()
 
-  /* === 選択範囲を ``` で囲むユーティリティ === */
-  const wrapSelectionWithFence = (el: HTMLTextAreaElement | null, inFullscreen = false) => {
+  /* === 選択範囲を ``` で囲むユーティリティ（必要ならボタンから呼ぶ） === */
+  const wrapSelectionWithFence = (el: HTMLTextAreaElement | null) => {
     if (!el) return
     const start = el.selectionStart ?? 0
     const end = el.selectionEnd ?? 0
     if (start === end) return
-    const text = inFullscreen ? input : input // 同一 state を使っている想定
+    const text = input
     const selected = text.slice(start, end)
     const wrapped = '```\n' + selected + '\n```'
     const next = text.slice(0, start) + wrapped + text.slice(end)
     setInput(next)
-    // 置換後のキャレット調整
     requestAnimationFrame(() => {
       el.selectionStart = start
       el.selectionEnd = start + wrapped.length
@@ -524,177 +571,190 @@ export default function ChatPage() {
     })
   }
 
-/* ============ 画面描画 ============ */
-return (
-  <>
-    <main className="flex h-screen">
-      {/* 左：問題リスト */}
-      <div className="w-1/3 bg-gray-50 border-r p-4 overflow-y-auto">
-        <h2 className="font-bold mb-2">問題を選択</h2>
-        {problems.map((p) => (
-          <button
-            key={p.id}
-            onClick={() => setProblem(p)}
-            className={`block w-full text-left p-2 mb-2 rounded ${
-              problem?.id === p.id ? 'bg-blue-100' : 'hover:bg-blue-50'
-            }`}
-          >
-            {p.title}
-          </button>
-        ))}
-        <div className="mt-4 border-t pt-3">
-          <h3 className="font-semibold text-sm text-gray-700 mb-2">選択中の問題</h3>
-          {problem ? (
-            <div className="bg-white border rounded p-3">
-              <div className="text-sm font-bold mb-2">{problem.title}</div>
-              {renderHighlightedDescription(problem.description || '（問題文が未設定です）')}
+  /* ============ 画面描画 ============ */
+  return (
+    <>
+      <main className="flex h-screen">
+        {/* 左：問題リスト */}
+        <div className="w-1/3 bg-gray-50 border-r p-4 overflow-y-auto">
+          <h2 className="font-bold mb-2">問題を選択</h2>
+          {problems.map((p) => (
+            <button
+              key={p.id}
+              onClick={() => setProblem(p)}
+              className={`block w-full text-left p-2 mb-2 rounded ${problem?.id === p.id ? 'bg-blue-100' : 'hover:bg-blue-50'}`}
+            >
+              {p.title}
+            </button>
+          ))}
+          <div className="mt-4 border-t pt-3">
+            <h3 className="font-semibold text-sm text-gray-700 mb-2">選択中の問題</h3>
+            {problem ? (
+              <div className="bg-white border rounded p-3">
+                <div className="text-sm font-bold mb-2">{problem.title}</div>
+                {renderHighlightedDescription(problem.description || '（問題文が未設定です）')}
+              </div>
+            ) : (
+              <div className="text-xs text-gray-500">左のリストから問題を選んでください。</div>
+            )}
+          </div>
+        </div>
+
+        {/* 右：チャット */}
+        <div className="flex-1 p-4 flex flex-col">
+          <div className="flex items-center justify-between mb-2">
+            <h1 className="text-xl font-bold">{problem?.title || '問題未選択'}</h1>
+            <div className="flex items-center gap-3">
+              {problem && (
+                <span className="text-xs px-2 py-1 rounded border bg-white">⏱ 継続: {fmtHMS(elapsedSec)}</span>
+              )}
+              <Link href="/settings" className="border px-3 py-1 rounded text-sm hover:bg-gray-50">
+                ユーザ情報を変更
+              </Link>
             </div>
-          ) : (
-            <div className="text-xs text-gray-500">左のリストから問題を選んでください。</div>
-          )}
-        </div>
-      </div>
-
-      {/* 右：チャット */}
-      <div className="flex-1 p-4 flex flex-col">
-        <div className="flex items-center justify-between mb-2">
-          <h1 className="text-xl font-bold">{problem?.title || '問題未選択'}</h1>
-          <Link href="/settings" className="border px-3 py-1 rounded text-sm hover:bg-gray-50">
-            ユーザ情報を変更
-          </Link>
-        </div>
-
-        <div className="flex items-center mb-4">
-          <span className={!gradingMode ? 'font-bold' : 'text-gray-400'}>通常モード</span>
-          <label className="mx-2 relative inline-flex items-center cursor-pointer">
-            <input
-              type="checkbox"
-              className="sr-only peer"
-              checked={gradingMode}
-              onChange={(e) => setGradingMode(e.target.checked)}
-            />
-            <div className="w-11 h-6 bg-gray-200 rounded-full peer peer-checked:bg-green-500 transition-all" />
-            <div className="absolute left-0.5 top-0.5 w-5 h-5 bg-white rounded-full shadow peer-checked:translate-x-full transition-all" />
-          </label>
-          <span className={gradingMode ? 'font-bold' : 'text-gray-400'}>採点モード</span>
-        </div>
-
-        {/* ガイドフォーム */}
-        <div className="space-y-3 mb-3">
-          {/* 課題を進める */}
-          <div className={`border rounded-lg ${gradingMode ? 'opacity-50 pointer-events-none' : ''}`}>
-            <button
-              className="w-full flex justify-between items-center px-3 py-2 text-left"
-              onClick={() => setOpenHint((v) => !v)}
-              disabled={!problem || gradingMode}
-            >
-              <span className="font-semibold">🧭 課題を進める（ヒント）</span>
-              <span className="text-sm text-gray-500">{openHint ? '閉じる' : '開く'}</span>
-            </button>
-            {openHint && (
-              <div className="px-3 pb-3 space-y-2">
-                <input
-                  className="w-full border p-2 rounded"
-                  placeholder="何を知りたい？"
-                  value={hintQuestion}
-                  onChange={(e) => setHintQuestion(e.target.value)}
-                />
-                <textarea
-                  className="w-full border p-2 rounded h-24"
-                  placeholder="（任意）現在の状況/要件"
-                  value={hintContext}
-                  onChange={(e) => setHintContext(e.target.value)}
-                />
-                <textarea
-                  className="w-full border p-2 rounded h-32 font-mono"
-                  placeholder="途中までのコード"
-                  value={hintCode}
-                  onChange={(e) => setHintCode(e.target.value)}
-                />
-                <div className="flex justify-end">
-                  <button
-                    className="bg-blue-600 text-white px-4 py-2 rounded disabled:opacity-50"
-                    onClick={handleSendHint}
-                    disabled={
-                      loading || !problem || gradingMode || (!hintQuestion.trim() && !hintCode.trim() && !hintContext.trim())
-                    }
-                  >
-                    送信（ヒント）
-                  </button>
-                </div>
-              </div>
-            )}
           </div>
 
-          {/* エラーを直す */}
-          <div className={`border rounded-lg ${gradingMode ? 'opacity-50 pointer-events-none' : ''}`}>
-            <button
-              className="w-full flex justify-between items-center px-3 py-2 text-left"
-              onClick={() => setOpenError((v) => !v)}
-              disabled={!problem || gradingMode}
-            >
-              <span className="font-semibold">🛠️ エラーを直す</span>
-              <span className="text-sm text-gray-500">{openError ? '閉じる' : '開く'}</span>
-            </button>
-            {openError && (
-              <div className="px-3 pb-3 space-y-2">
-                <input
-                  className="w-full border p-2 rounded"
-                  placeholder="（任意）エラー箇所（例: Main.javaの25行目）"
-                  value={errWhere}
-                  onChange={(e) => setErrWhere(e.target.value)}
-                />
-                <textarea
-                  className="w-full border p-2 rounded h-20"
-                  placeholder="エラーメッセージ/想定と異なる結果"
-                  value={errMessage}
-                  onChange={(e) => setErrMessage(e.target.value)}
-                />
-                <textarea
-                  className="w-full border p-2 rounded h-32 font-mono"
-                  placeholder="該当コード"
-                  value={errCode}
-                  onChange={(e) => setErrCode(e.target.value)}
-                />
-                <textarea
-                  className="w-full border p-2 rounded h-20"
-                  placeholder="（任意）自分の仮説"
-                  value={errThought}
-                  onChange={(e) => setErrThought(e.target.value)}
-                />
-                <div className="flex justify-end">
-                  <button
-                    className="bg-blue-600 text-white px-4 py-2 rounded disabled:opacity-50"
-                    onClick={handleSendError}
-                    disabled={
-                      loading ||
-                      !problem ||
-                      gradingMode ||
-                      (!errWhere.trim() && !errMessage.trim() && !errCode.trim() && !errThought.trim())
-                    }
-                  >
-                    送信（エラー診断）
-                  </button>
-                </div>
-              </div>
-            )}
+          <div className="flex items-center mb-4">
+            <span className={!gradingMode ? 'font-bold' : 'text-gray-400'}>通常モード</span>
+            <label className="mx-2 relative inline-flex items-center cursor-pointer">
+              <input
+                type="checkbox"
+                className="sr-only peer"
+                checked={gradingMode}
+                onChange={(e) => setGradingMode(e.target.checked)}
+              />
+              <div className="w-11 h-6 bg-gray-200 rounded-full peer peer-checked:bg-green-500 transition-all" />
+              <div className="absolute left-0.5 top-0.5 w-5 h-5 bg-white rounded-full shadow peer-checked:translate-x-full transition-all" />
+            </label>
+            <span className={gradingMode ? 'font-bold' : 'text-gray-400'}>採点モード</span>
           </div>
-        </div>
 
-        {/* メッセージ表示 */}
-        <div className="flex-1 space-y-4 overflow-y-auto">
-          {messages.map((msg: Message, idx: number) => {
-            if (msg.role === 'assistant') {
-              const { advice, question, codeBlock, rest } = parseAdviceQuestion(msg.content)
-              const restParts = rest ? formatMessageContent(rest) : []
-              return (
-                <div key={idx} className="flex justify-start">
-                  <div className="p-3 rounded max-w-[75%] bg-green-50 whitespace-pre-wrap break-words space-y-2">
-                    {advice && <p className="leading-relaxed">{emphasizeInline(advice)}</p>}
-                    {question && <p className="leading-relaxed font-semibold">{emphasizeInline(question)}</p>}
-                    {codeBlock && (
-                      <div>
-                        {formatMessageContent(codeBlock).map((part, i) =>
+          {/* ガイドフォーム */}
+          <div className="space-y-3 mb-3">
+            {/* 課題を進める */}
+            <div className={`border rounded-lg ${gradingMode ? 'opacity-50 pointer-events-none' : ''}`}>
+              <button
+                className="w-full flex justify-between items-center px-3 py-2 text-left"
+                onClick={() => setOpenHint((v) => !v)}
+                disabled={!problem || gradingMode}
+              >
+                <span className="font-semibold">🧭 課題を進める（ヒント）</span>
+                <span className="text-sm text-gray-500">{openHint ? '閉じる' : '開く'}</span>
+              </button>
+              {openHint && (
+                <div className="px-3 pb-3 space-y-2">
+                  <input
+                    className="w-full border p-2 rounded"
+                    placeholder="何を知りたい？"
+                    value={hintQuestion}
+                    onChange={(e) => setHintQuestion(e.target.value)}
+                  />
+                  <textarea
+                    className="w-full border p-2 rounded h-24"
+                    placeholder="（任意）現在の状況/要件"
+                    value={hintContext}
+                    onChange={(e) => setHintContext(e.target.value)}
+                  />
+                  <textarea
+                    className="w-full border p-2 rounded h-32 font-mono"
+                    placeholder="途中までのコード"
+                    value={hintCode}
+                    onChange={(e) => setHintCode(e.target.value)}
+                  />
+                  <div className="flex justify-end">
+                    <button
+                      className="bg-blue-600 text-white px-4 py-2 rounded disabled:opacity-50"
+                      onClick={handleSendHint}
+                      disabled={loading || !problem || gradingMode || ( !hintQuestion.trim() && !hintCode.trim() && !hintContext.trim() )}
+                    >
+                      送信（ヒント）
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* エラーを直す */}
+            <div className={`border rounded-lg ${gradingMode ? 'opacity-50 pointer-events-none' : ''}`}>
+              <button
+                className="w-full flex justify-between items-center px-3 py-2 text-left"
+                onClick={() => setOpenError((v) => !v)}
+                disabled={!problem || gradingMode}
+              >
+                <span className="font-semibold">🛠️ エラーを直す</span>
+                <span className="text-sm text-gray-500">{openError ? '閉じる' : '開く'}</span>
+              </button>
+              {openError && (
+                <div className="px-3 pb-3 space-y-2">
+                  <input
+                    className="w-full border p-2 rounded"
+                    placeholder="（任意）エラー箇所（例: Main.javaの25行目）"
+                    value={errWhere}
+                    onChange={(e) => setErrWhere(e.target.value)}
+                  />
+                  <textarea
+                    className="w-full border p-2 rounded h-20"
+                    placeholder="エラーメッセージ/想定と異なる結果"
+                    value={errMessage}
+                    onChange={(e) => setErrMessage(e.target.value)}
+                  />
+                  <textarea
+                    className="w-full border p-2 rounded h-32 font-mono"
+                    placeholder="該当コード"
+                    value={errCode}
+                    onChange={(e) => setErrCode(e.target.value)}
+                  />
+                  <textarea
+                    className="w-full border p-2 rounded h-20"
+                    placeholder="（任意）自分の仮説"
+                    value={errThought}
+                    onChange={(e) => setErrThought(e.target.value)}
+                  />
+                  <div className="flex justify-end">
+                    <button
+                      className="bg-blue-600 text-white px-4 py-2 rounded disabled:opacity-50"
+                      onClick={handleSendError}
+                      disabled={
+                        loading ||
+                        !problem ||
+                        gradingMode ||
+                        (!errWhere.trim() && !errMessage.trim() && !errCode.trim() && !errThought.trim())
+                      }
+                    >
+                      送信（エラー診断）
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* メッセージ表示 */}
+          <div className="flex-1 space-y-4 overflow-y-auto">
+            {messages.map((msg: Message, idx: number) => {
+              if (msg.role === 'assistant') {
+                const { advice, question, codeBlock, rest } = parseAdviceQuestion(msg.content)
+                const restParts = rest ? formatMessageContent(rest) : []
+                return (
+                  <div key={idx} className="flex justify-start">
+                    <div className="p-3 rounded max-w-[75%] bg-green-50 whitespace-pre-wrap break-words space-y-2">
+                      {advice && <p className="leading-relaxed">{emphasizeInline(advice)}</p>}
+                      {question && <p className="leading-relaxed font-semibold">{emphasizeInline(question)}</p>}
+                      {codeBlock && (
+                        <div>
+                          {formatMessageContent(codeBlock).map((part, i) =>
+                            typeof part === 'string' ? (
+                              <p key={i}>{part}</p>
+                            ) : (
+                              <pre key={i} className="bg-gray-200 p-2 rounded overflow-x-auto text-sm">
+                                <code>{part.code}</code>
+                              </pre>
+                            )
+                          )}
+                        </div>
+                      )}
+                      {restParts.length > 0 &&
+                        restParts.map((part, i) =>
                           typeof part === 'string' ? (
                             <p key={i}>{part}</p>
                           ) : (
@@ -703,162 +763,80 @@ return (
                             </pre>
                           )
                         )}
-                      </div>
+                    </div>
+                  </div>
+                )
+              }
+              return (
+                <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                  <div
+                    className={`p-3 rounded max-w-[75%] whitespace-pre-wrap break-words ${
+                      msg.role === 'user' ? 'bg-blue-100' : 'bg-green-50'
+                    }`}
+                  >
+                    {formatMessageContent(msg.content).map((part, i) =>
+                      typeof part === 'string' ? (
+                        <p key={i}>{part}</p>
+                      ) : (
+                        <pre key={i} className="bg-gray-200 p-2 rounded overflow-x-auto text-sm">
+                          <code>{part.code}</code>
+                        </pre>
+                      )
                     )}
-                    {restParts.length > 0 &&
-                      restParts.map((part, i) =>
-                        typeof part === 'string' ? (
-                          <p key={i}>{part}</p>
-                        ) : (
-                          <pre key={i} className="bg-gray-200 p-2 rounded overflow-x-auto text-sm">
-                            <code>{part.code}</code>
-                          </pre>
-                        )
-                      )}
                   </div>
                 </div>
               )
-            }
-            return (
-              <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                <div
-                  className={`p-3 rounded max-w-[75%] whitespace-pre-wrap break-words ${
-                    msg.role === 'user' ? 'bg-blue-100' : 'bg-green-50'
-                  }`}
-                >
-                  {formatMessageContent(msg.content).map((part, i) =>
-                    typeof part === 'string' ? (
-                      <p key={i}>{part}</p>
-                    ) : (
-                      <pre key={i} className="bg-gray-200 p-2 rounded overflow-x-auto text-sm">
-                        <code>{part.code}</code>
-                      </pre>
-                    )
-                  )}
-                </div>
-              </div>
-            )
-          })}
-          <div ref={bottomRef} />
-        </div>
-
-        {/* 自由入力（改良版） */}
-        <div className="mt-4">
-          <AutoGrowTextarea
-            ref={inputRef}
-            value={input}
-            placeholder={problem ? '自由入力（Enterで送信、Shift+Enterで改行 / Tabでインデント）' : 'まず問題を選んでください'}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Tab') {
-                e.preventDefault()
-                const el = e.currentTarget
-                const start = el.selectionStart ?? 0
-                const end = el.selectionEnd ?? 0
-                const indent = '  '
-                const next = input.slice(0, start) + indent + input.slice(end)
-                setInput(next)
-                requestAnimationFrame(() => {
-                  el.selectionStart = el.selectionEnd = start + indent.length
-                })
-              }
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault()
-                handleSend()
-              }
-            }}
-            maxVh={70}
-          />
-          <div className="mt-1 flex items-center justify-between text-xs text-gray-600">
-            <div>
-              {input.split('\n').length} 行 / {input.length} 文字
-            </div>
-            <div className="space-x-2">
-              <button
-                className="border px-2 py-1 rounded hover:bg-gray-50"
-                onClick={() => wrapSelectionWithFence(inputRef.current)}
-                title="選択したテキストを ``` で囲む"
-              >
-                選択を```で囲む
-              </button>
-              <button className="border px-3 py-1 rounded hover:bg-gray-50" onClick={() => setFullscreen(true)}>
-                全画面で編集
-              </button>
-              <button
-                className="bg-blue-600 text-white px-4 py-2 rounded disabled:opacity-50"
-                onClick={handleSend}
-                disabled={!input.trim() || loading || !problem}
-              >
-                {loading ? '送信中...' : '自由入力で送信'}
-              </button>
-            </div>
+            })}
+            <div ref={bottomRef} />
           </div>
-        </div>
-      </div>
-    </main>
 
-    {/* 全画面エディタ モーダル（main と並列なのでフラグメント内に置く） */}
-    {fullscreen && (
-      <div
-        className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-3"
-        onClick={() => setFullscreen(false)}
-      >
-        <div
-          className="bg-white w-full h-full max-w-6xl max-h-[95vh] rounded-lg shadow-lg p-4 flex flex-col"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <div className="flex items-center justify-between mb-2">
-            <div className="font-semibold">全画面エディタ</div>
-            <div className="space-x-2">
-              <button
-                className="border px-2 py-1 rounded hover:bg-gray-50"
-                onClick={() => wrapSelectionWithFence(fullscreenRef.current, true)}
-              >
-                選択を```で囲む
-              </button>
-              <button className="border px-3 py-1 rounded" onClick={() => setFullscreen(false)}>
-                閉じる
-              </button>
-              <button
-                className="bg-blue-600 text-white px-3 py-1 rounded"
-                onClick={() => {
-                  setFullscreen(false)
+          {/* 自由入力（オートリサイズのみ） */}
+          <div className="mt-4">
+            <AutoGrowTextarea
+              value={input}
+              placeholder={problem ? '自由入力（Enterで送信、Shift+Enterで改行 / Tabでインデント）' : 'まず問題を選んでください'}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Tab') {
+                  e.preventDefault()
+                  const el = e.currentTarget
+                  const start = el.selectionStart ?? 0
+                  const end = el.selectionEnd ?? 0
+                  const indent = '  '
+                  const next = input.slice(0, start) + indent + input.slice(end)
+                  setInput(next)
+                  requestAnimationFrame(() => {
+                    el.selectionStart = el.selectionEnd = start + indent.length
+                  })
+                }
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault()
                   handleSend()
-                }}
-              >
-                送信
-              </button>
+                }
+              }}
+              maxVh={70}
+            />
+            <div className="mt-1 flex items-center justify-between text-xs text-gray-600">
+              <div>{input.split('\n').length} 行 / {input.length} 文字</div>
+              <div className="space-x-2">
+                <button
+                  className="border px-2 py-1 rounded hover:bg-gray-50"
+                  onClick={() => wrapSelectionWithFence(document.activeElement as HTMLTextAreaElement)}
+                >
+                  選択を```で囲む
+                </button>
+                <button
+                  className="bg-blue-600 text-white px-4 py-2 rounded disabled:opacity-50"
+                  onClick={handleSend}
+                  disabled={!input.trim() || loading || !problem}
+                >
+                  {loading ? '送信中...' : '自由入力で送信'}
+                </button>
+              </div>
             </div>
           </div>
-
-          <AutoGrowTextarea
-            ref={fullscreenRef}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Tab') {
-                e.preventDefault()
-                const el = e.currentTarget
-                const start = el.selectionStart ?? 0
-                const end = el.selectionEnd ?? 0
-                const indent = '  '
-                const next = input.slice(0, start) + indent + input.slice(end)
-                setInput(next)
-                requestAnimationFrame(() => {
-                  el.selectionStart = el.selectionEnd = start + indent.length
-                })
-              }
-            }}
-            className="flex-1 min-h-[60vh]"
-            maxVh={85}
-            placeholder="ここで大きく編集できます"
-          />
-          <div className="mt-1 text-right text-xs text-gray-600">
-            {input.split('\n').length} 行 / {input.length} 文字
-          </div>
         </div>
-      </div>
-    )}
-  </>
-)
+      </main>
+    </>
+  )
 }
