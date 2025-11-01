@@ -1,11 +1,61 @@
 'use client'
 
-import { useEffect, useMemo, useRef, useState, ReactNode } from 'react'
+import React, { useEffect, useMemo, useRef, useState, ReactNode, forwardRef, useImperativeHandle } from 'react'
 import Link from 'next/link'
 
+/* ================== 入力欄ユーティリティ ================== */
+type AutoGrowProps = React.TextareaHTMLAttributes<HTMLTextAreaElement> & {
+  /** 高さの上限（画面比 %） */
+  maxVh?: number
+}
+
+/** 入力に応じて高さが自動調整される textarea（最大高さは画面比で制限） */
+const AutoGrowTextarea = forwardRef<HTMLTextAreaElement, AutoGrowProps>(function AutoGrowTextarea(
+  { maxVh = 70, className = '', value, onInput, ...rest },
+  ref
+) {
+  const innerRef = useRef<HTMLTextAreaElement | null>(null)
+
+  const fit = () => {
+    const el = innerRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    const maxPx = Math.round(window.innerHeight * (maxVh / 100))
+    el.style.height = Math.min(el.scrollHeight, maxPx) + 'px'
+  }
+
+  useEffect(() => {
+    fit()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value])
+
+  useImperativeHandle(ref, () => innerRef.current as HTMLTextAreaElement, [])
+
+  return (
+    <textarea
+      ref={innerRef}
+      value={value as string}
+      onInput={(e) => {
+        fit()
+        onInput?.(e)
+      }}
+      className={
+        [
+          'w-full border rounded font-mono leading-6 shadow-inner',
+          'min-h-[10rem] resize-y overflow-auto',
+          'focus:outline-none focus:ring-2 focus:ring-blue-400',
+          className
+        ].join(' ')
+      }
+      {...rest}
+    />
+  )
+})
+
+/* ================== 教員プロンプト群（既存） ================== */
 /**
  * 教員モードのベースプロンプト（抽象度は「型は抽象語・識別子は問題準拠」）
- * テンプレ内のコードフェンスは \` でエスケープ（\`\`\`）する。
+ * テンプレ内のコードフェンスは \` でエスケープ（```）する。
  * ★模範コード（solution_code）に示された抽象度・記法に厳密準拠★
  */
 const BASE_TEACHER_PROMPT = (lang: string) => String.raw`
@@ -275,7 +325,7 @@ function detectLang(text: string, problem?: Problem): string {
   return 'java'
 }
 
-/* ===== 画面コンポーネント ===== */
+/* ================== 画面コンポーネント ================== */
 export default function ChatPage() {
   const [input, setInput] = useState('')
   const [allMessages, setAllMessages] = useState<{ [problemId: string]: Message[] }>({})
@@ -284,6 +334,11 @@ export default function ChatPage() {
   const [problem, setProblem] = useState<Problem | null>(null)
   const [gradingMode, setGradingMode] = useState(false)
   const bottomRef = useRef<HTMLDivElement | null>(null)
+
+  // 全画面エディタ
+  const [fullscreen, setFullscreen] = useState(false)
+  const inputRef = useRef<HTMLTextAreaElement | null>(null)
+  const fullscreenRef = useRef<HTMLTextAreaElement | null>(null)
 
   // ガイドフォーム
   const [openHint, setOpenHint] = useState(false)
@@ -364,7 +419,7 @@ export default function ChatPage() {
           .map((l) => l.replace(/^data: /, ''))
           .filter((l) => l !== '' && l !== '[DONE]')
 
-        for (const jsonStr of lines) {
+      for (const jsonStr of lines) {
           try {
             const parsed = JSON.parse(jsonStr)
             const delta = parsed.choices?.[0]?.delta?.content
@@ -450,7 +505,28 @@ export default function ChatPage() {
   const hintEmpty = !hintQuestion.trim() && !hintCode.trim() && !hintContext.trim()
   const errEmpty = !errWhere.trim() && !errMessage.trim() && !errCode.trim() && !errThought.trim()
 
-  return (
+  /* === 選択範囲を ``` で囲むユーティリティ === */
+  const wrapSelectionWithFence = (el: HTMLTextAreaElement | null, inFullscreen = false) => {
+    if (!el) return
+    const start = el.selectionStart ?? 0
+    const end = el.selectionEnd ?? 0
+    if (start === end) return
+    const text = inFullscreen ? input : input // 同一 state を使っている想定
+    const selected = text.slice(start, end)
+    const wrapped = '```\n' + selected + '\n```'
+    const next = text.slice(0, start) + wrapped + text.slice(end)
+    setInput(next)
+    // 置換後のキャレット調整
+    requestAnimationFrame(() => {
+      el.selectionStart = start
+      el.selectionEnd = start + wrapped.length
+      el.focus()
+    })
+  }
+
+/* ============ 画面描画 ============ */
+return (
+  <>
     <main className="flex h-screen">
       {/* 左：問題リスト */}
       <div className="w-1/3 bg-gray-50 border-r p-4 overflow-y-auto">
@@ -539,7 +615,9 @@ export default function ChatPage() {
                   <button
                     className="bg-blue-600 text-white px-4 py-2 rounded disabled:opacity-50"
                     onClick={handleSendHint}
-                    disabled={loading || !problem || gradingMode || hintEmpty}
+                    disabled={
+                      loading || !problem || gradingMode || (!hintQuestion.trim() && !hintCode.trim() && !hintContext.trim())
+                    }
                   >
                     送信（ヒント）
                   </button>
@@ -588,7 +666,12 @@ export default function ChatPage() {
                   <button
                     className="bg-blue-600 text-white px-4 py-2 rounded disabled:opacity-50"
                     onClick={handleSendError}
-                    disabled={loading || !problem || gradingMode || errEmpty}
+                    disabled={
+                      loading ||
+                      !problem ||
+                      gradingMode ||
+                      (!errWhere.trim() && !errMessage.trim() && !errCode.trim() && !errThought.trim())
+                    }
                   >
                     送信（エラー診断）
                   </button>
@@ -659,32 +742,123 @@ export default function ChatPage() {
           <div ref={bottomRef} />
         </div>
 
-        {/* 自由入力 */}
+        {/* 自由入力（改良版） */}
         <div className="mt-4">
-          <textarea
-            className="w-full border p-2 rounded h-24 resize-none"
+          <AutoGrowTextarea
+            ref={inputRef}
             value={input}
-            placeholder={problem ? '自由入力（Enterで送信、Shift+Enterで改行）' : 'まず問題を選んでください'}
+            placeholder={problem ? '自由入力（Enterで送信、Shift+Enterで改行 / Tabでインデント）' : 'まず問題を選んでください'}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {
+              if (e.key === 'Tab') {
+                e.preventDefault()
+                const el = e.currentTarget
+                const start = el.selectionStart ?? 0
+                const end = el.selectionEnd ?? 0
+                const indent = '  '
+                const next = input.slice(0, start) + indent + input.slice(end)
+                setInput(next)
+                requestAnimationFrame(() => {
+                  el.selectionStart = el.selectionEnd = start + indent.length
+                })
+              }
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault()
                 handleSend()
               }
             }}
-            disabled={!problem}
+            maxVh={70}
           />
-          <div className="flex justify-end mt-2">
-            <button
-              className="bg-blue-600 text-white px-4 py-2 rounded disabled:opacity-50"
-              onClick={handleSend}
-              disabled={!input.trim() || loading || !problem}
-            >
-              {loading ? '送信中...' : '自由入力で送信'}
-            </button>
+          <div className="mt-1 flex items-center justify-between text-xs text-gray-600">
+            <div>
+              {input.split('\n').length} 行 / {input.length} 文字
+            </div>
+            <div className="space-x-2">
+              <button
+                className="border px-2 py-1 rounded hover:bg-gray-50"
+                onClick={() => wrapSelectionWithFence(inputRef.current)}
+                title="選択したテキストを ``` で囲む"
+              >
+                選択を```で囲む
+              </button>
+              <button className="border px-3 py-1 rounded hover:bg-gray-50" onClick={() => setFullscreen(true)}>
+                全画面で編集
+              </button>
+              <button
+                className="bg-blue-600 text-white px-4 py-2 rounded disabled:opacity-50"
+                onClick={handleSend}
+                disabled={!input.trim() || loading || !problem}
+              >
+                {loading ? '送信中...' : '自由入力で送信'}
+              </button>
+            </div>
           </div>
         </div>
       </div>
     </main>
-  )
+
+    {/* 全画面エディタ モーダル（main と並列なのでフラグメント内に置く） */}
+    {fullscreen && (
+      <div
+        className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-3"
+        onClick={() => setFullscreen(false)}
+      >
+        <div
+          className="bg-white w-full h-full max-w-6xl max-h-[95vh] rounded-lg shadow-lg p-4 flex flex-col"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="flex items-center justify-between mb-2">
+            <div className="font-semibold">全画面エディタ</div>
+            <div className="space-x-2">
+              <button
+                className="border px-2 py-1 rounded hover:bg-gray-50"
+                onClick={() => wrapSelectionWithFence(fullscreenRef.current, true)}
+              >
+                選択を```で囲む
+              </button>
+              <button className="border px-3 py-1 rounded" onClick={() => setFullscreen(false)}>
+                閉じる
+              </button>
+              <button
+                className="bg-blue-600 text-white px-3 py-1 rounded"
+                onClick={() => {
+                  setFullscreen(false)
+                  handleSend()
+                }}
+              >
+                送信
+              </button>
+            </div>
+          </div>
+
+          <AutoGrowTextarea
+            ref={fullscreenRef}
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Tab') {
+                e.preventDefault()
+                const el = e.currentTarget
+                const start = el.selectionStart ?? 0
+                const end = el.selectionEnd ?? 0
+                const indent = '  '
+                const next = input.slice(0, start) + indent + input.slice(end)
+                setInput(next)
+                requestAnimationFrame(() => {
+                  el.selectionStart = el.selectionEnd = start + indent.length
+                })
+              }
+            }}
+            className="flex-1 min-h-[60vh]"
+            maxVh={85}
+            placeholder="ここで大きく編集できます"
+          />
+          <div className="mt-1 text-right text-xs text-gray-600">
+            {input.split('\n').length} 行 / {input.length} 文字
+          </div>
+        </div>
+      </div>
+    )}
+  </>
+)
 }
