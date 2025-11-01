@@ -1,22 +1,18 @@
 // C:\Users\Admin\vta\src\app\chat\page.tsx
 'use client'
 
-import React, { useEffect, useMemo, useRef, useState, ReactNode, forwardRef, useImperativeHandle } from 'react'
+import React, {
+  useEffect, useMemo, useRef, useState, ReactNode,
+  forwardRef, useImperativeHandle,
+} from 'react'
 import Link from 'next/link'
 
 /* ================== 入力欄ユーティリティ ================== */
-type AutoGrowProps = React.TextareaHTMLAttributes<HTMLTextAreaElement> & {
-  /** 高さの上限（画面比 %） */
-  maxVh?: number
-}
-
-/** 入力に応じて高さが自動調整される textarea（最大高さは画面比で制限） */
+type AutoGrowProps = React.TextareaHTMLAttributes<HTMLTextAreaElement> & { maxVh?: number }
 const AutoGrowTextarea = forwardRef<HTMLTextAreaElement, AutoGrowProps>(function AutoGrowTextarea(
-  { maxVh = 70, className = '', value, onInput, ...rest },
-  ref
+  { maxVh = 70, className = '', value, onInput, ...rest }, ref
 ) {
   const innerRef = useRef<HTMLTextAreaElement | null>(null)
-
   const fit = () => {
     const el = innerRef.current
     if (!el) return
@@ -24,27 +20,18 @@ const AutoGrowTextarea = forwardRef<HTMLTextAreaElement, AutoGrowProps>(function
     const maxPx = Math.round(window.innerHeight * (maxVh / 100))
     el.style.height = Math.min(el.scrollHeight, maxPx) + 'px'
   }
-
-  useEffect(() => {
-    fit()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [value])
-
+  useEffect(() => { fit() }, [value])
   useImperativeHandle(ref, () => innerRef.current as HTMLTextAreaElement, [])
-
   return (
     <textarea
       ref={innerRef}
       value={value as string}
-      onInput={(e) => {
-        fit()
-        onInput?.(e)
-      }}
+      onInput={(e) => { fit(); onInput?.(e) }}
       className={[
         'w-full border rounded font-mono leading-6 shadow-inner',
         'min-h-[10rem] resize-y overflow-auto',
         'focus:outline-none focus:ring-2 focus:ring-blue-400',
-        className
+        className,
       ].join(' ')}
       {...rest}
     />
@@ -52,264 +39,120 @@ const AutoGrowTextarea = forwardRef<HTMLTextAreaElement, AutoGrowProps>(function
 })
 
 /* ================== 教員プロンプト群（既存） ================== */
-/**
- * 教員モードのベースプロンプト（抽象度は「型は抽象語・識別子は問題準拠」）
- * テンプレ内のコードフェンスは ` でエスケープ（```）する。
- * ★模範コード（solution_code）に示された抽象度・記法に厳密準拠★
- */
 const BASE_TEACHER_PROMPT = (lang: string) => String.raw`
 [役割] プログラミングを正しく教えられる教員。  
 学習者が「いま質問した箇所だけ」を対象に説明し、それ以外の部分は出力しない。  
 目的は、学習者が自分のコードの“どの位置に何を書くか”を理解すること。
 
 [出力範囲の制限（最重要）]
-- 学習者が質問した箇所（例: フィールド宣言・コンストラクタの一部など）以外の要素を一切出してはいけない。  
-  例: 質問が「インスタンスフィールド」に関するものであれば、toStringやmainを出してはならない。
-- 「全体像」や「次に書く部分」を先回りして出すことは禁止。
-- 質問に含まれない範囲は「// …（この部分はまだ扱わない）」として省略してよい。
+- 学習者が質問した箇所以外の要素を出さない。
+- 「全体像」や「次に書く部分」を先回りして出さない。
 
 [最優先禁止ルール]
-- 問題文や模範コードに「〜を宣言/定義しなさい」とある行を完成させてはならない（完成コードの提示禁止）。
-- そうした行は「// ここに <...> を書く」「// ここに <...> を宣言する」と**位置だけ**示す。
-- 模範コードに存在しない要素（不要なメソッド・補助クラス・アクセス修飾子・具体リテラルなど）を**新規に追加しない**。
+- 完成コードの提示禁止（位置だけ示す）。
 
-[抽象度の基準（模範コード準拠・固定）]
-- 型は**抽象語**で表す（例: <整数型>, <文字列型>, <文字列配列型>, <整数配列型>）。
-- **識別子は問題/模範コードで明示されたもののみ**使う（例: id, name, subject, score, Person1）。
-- 配列リテラルは**形だけ**を示す（{ "<要素1>", "<要素2>" } / { <要素1>, <要素2> }）。  
-  "math", "english", 0 といった具体値は出さない。
-+ - **記法は模範コードに合わせる**：例）subject/score の初期化は \`{...}\` リテラルのみ。\`new String[]{...}\` のように**別記法へ変更しない**。
-- 模範コードに無い修飾（public/private 等）や順序変更をしない。**順序と行構造を尊重**する。
-
-[抽象度逸脱の扱い]
-- 学習者の入力に具体リテラル等が含まれていても、回答では**プレースホルダに置換**して示す（例: "math" → "<要素1>"）。
-- 完成コード化しそうな場合は、**位置と意図だけ**をコメントで指示する。
-
-[逆質問（概念理解を促す）]
-- 「どの部分を自分が埋める必要があるか／どの行はまだ書かないか」を説明させる問いにする。必ず「?」で終える。
+[抽象度の基準]
+- 型は抽象語、識別子は問題/模範コード準拠、具体リテラル非使用。
++ - **記法は模範コードに合わせる**（例：配列は \`{...}\` リテラルのみ。\`new String[]{...}\` にしない）。
 
 [コード出力ルール]
-- フェンス付きコード（\`\`\`${lang} ... \`\`\`）で出力。
-- 1行目に「// この部分の骨組み」と書く。
-- 各行に日本語コメントで役割を説明する。
-- **模範コードの抽象度・記法・順序に一致**させる（言い換えや別表現にしない）。
-- 質問範囲外の構造（toString, main 等）は出さない。
+- \`\`\`${lang}\`\`\` で、該当範囲のみ骨組みを出す。
 
-[出力形式(厳守)]
-アドバイス: 学習者が「次に自分で書くべき行・位置」を3〜5文で説明する。  
-質問: 学習者が「自分が書くべき部分」と「与えられている部分」の違いを説明できるか確認する問いを1つだけ（必ず「?」で終える）。  
-コード例: 質問で触れた範囲だけを \`\`\`${lang}\`\`\` で示す。**型は抽象語**（<整数型> など）、**識別子は問題/模範コードで指定のもののみ**。**具体リテラルは入れない**。
+[出力形式]
+アドバイス: 3〜5文。  
+質問: 1つだけ（?で終える）。  
+コード例: 上記の抽象度/記法で。
 `.trim()
 
-/** 出力形式の追加縛り（コードフェンスはエスケープ済み） */
 const outputRule = (lang: string) => String.raw`
 【出力形式(再確認)】
-アドバイス: 最大5文。問題にまだ出ていないフィールド・配列・初期値は書かないこと。
-質問: 「この時点では○○を書かなくてよい」と学習者に言わせる質問にすること。
-コード例: \`\`\`${lang} から始め、<...> の抽象語のみ。**模範コードにない識別子・修飾子・書式は使わない**。  
-　　　　具体値（"math", 0 等）や \`new 型[]{...}\` の導入は禁止。**{ "<要素1>", "<要素2>" } / { <要素1>, <要素2> } の形だけ**。
+アドバイスは最大5文。具体リテラル禁止。
+質問は「この時点では○○を書かなくてよい」系を1つ。
+コード例は \`\`\`${lang} から。識別子追加や別記法の導入は禁止。
 `.trim()
 
-/** 採点モード（抽象度・記法の準拠度も評価） */
 const GRADING_PROMPT = String.raw`
-[役割] 教員として採点・助言を行う。
-[比較] 模範コードと学生コードを比較し、未達箇所を抽出。
-[評価観点]
-- 機能面の正しさ
-- **抽象度の一致**（型は抽象語、識別子は問題/模範コード準拠、具体リテラル非使用）
-- **記法の一致**（配列初期化は \{…\} リテラル等、模範コードと同一記法・順序）
-[出力]
-- 完成度: XX%（根拠を簡潔に）
-- 未達/不正確: 問題文・模範コードの該当箇所を短く列挙（なければ不要）
-- 次の一手: 実装/修正すべき箇所を1〜3点（なければ不要）
-- すべて正しく実装されていた場合は、「あなたのコードは完璧です。」とだけ表示
-[禁止]
-- 模範コードの全文貼付は禁止。
-- 具体リテラル（"math", 0 等）を含む完成コードの提示は禁止。
-[追加]
-- 現時点のコードに対して**抽象的な形**のテスト観点やチェック箇所を提示（例: 「フィールド順序」「配列リテラルの書式」「引数順」）。コード全文は不要。
+[役割] 採点・助言。完成度・未達・次の一手のみを簡潔に。
+[禁止] 模範コード全文や具体リテラルを含む完成コードの提示。
 `.trim()
 
 type Message = { role: 'user' | 'assistant'; content: string }
 type Problem = { id: string; title: string; description: string; solution_code?: string }
 
 /* ===== 問題文ハイライト ===== */
-const KW_HIGHLIGHT = /(重要|ポイント|要件|仕様|条件|制約|注意|入力|出力|手順|実装手順|目的|ヒント|制限|例|例外|評価|採点)/
-const LINE_LABELS = /^(入力|出力|条件|制約|注意|目的|手順|実装手順|ポイント|重要)[:：]/
+const KW_H = /(重要|ポイント|要件|仕様|条件|制約|注意|入力|出力|手順|実装手順|目的|ヒント|制限|例|例外|評価|採点)/
+const LINE_L = /^(入力|出力|条件|制約|注意|目的|手順|実装手順|ポイント|重要)[:：]/
 const normalize = (t: string) => (t || '').replace(/\r\n?/g, '\n')
-
 function highlightInline(line: string): ReactNode[] {
   if (!line) return ['']
-  const out: ReactNode[] = []
-  let last = 0
-  const g = new RegExp(KW_HIGHLIGHT.source, 'g')
-  let m: RegExpExecArray | null
+  const out: ReactNode[] = []; let last = 0; const g = new RegExp(KW_H.source, 'g'); let m: RegExpExecArray | null
   while ((m = g.exec(line))) {
-    const hit = m[0]
     if (m.index > last) out.push(line.slice(last, m.index))
-    out.push(
-      <mark key={`${m.index}-${hit}`} className="bg-transparent text-rose-600 font-semibold">
-        {hit}
-      </mark>
-    )
-    last = m.index + hit.length
+    out.push(<mark key={`${m.index}-${m[0]}`} className="bg-transparent text-rose-600 font-semibold">{m[0]}</mark>)
+    last = m.index + m[0].length
   }
   if (last < line.length) out.push(line.slice(last))
   return out
 }
-
 function renderHighlightedDescription(desc: string) {
   const lines = normalize(desc).split('\n')
   type Block = { type: 'p'; text: string } | { type: 'ul'; items: string[] } | { type: 'ol'; items: string[] }
-
-  const blocks: Block[] = []
-  let current: Block | null = null
-  const push = () => {
-    if (current) blocks.push(current)
-    current = null
-  }
-
+  const blocks: Block[] = []; let current: Block | null = null
+  const push = () => { if (current) blocks.push(current); current = null }
   for (const raw of lines) {
     const line = raw.trim()
-    if (!line) {
-      push()
-      blocks.push({ type: 'p', text: '' })
-      continue
-    }
-
+    if (!line) { push(); blocks.push({ type: 'p', text: '' }); continue }
     const step = line.match(/^(\d+)[\.\)\}]?[ 　、．)](.*)$/)
-    if (step) {
-      const body = (step[2] || '').trim()
-      if (!current || current.type !== 'ol') {
-        push()
-        current = { type: 'ol', items: [] }
-      }
-      current.items.push(body)
-      continue
-    }
-
-    if (/^[-–—*・※]\s+/.test(line)) {
-      const body = line.replace(/^[-–—*・※]\s+/, '')
-      if (!current || current.type !== 'ul') {
-        push()
-        current = { type: 'ul', items: [] }
-      }
-      current.items.push(body)
-      continue
-    }
-
-    push()
-    blocks.push({ type: 'p', text: line })
+    if (step) { const body = (step[2] || '').trim(); if (!current || current.type !== 'ol') { push(); current = { type: 'ol', items: [] } } ; current.items.push(body); continue }
+    if (/^[-–—*・※]\s+/.test(line)) { const body = line.replace(/^[-–—*・※]\s+/, ''); if (!current || current.type !== 'ul') { push(); current = { type: 'ul', items: [] } } ; current.items.push(body); continue }
+    push(); blocks.push({ type: 'p', text: line })
   }
   push()
-
   return (
     <div className="text-sm leading-relaxed whitespace-pre-wrap break-words">
-      {blocks.map((b, i) => {
-        if (b.type === 'ul') {
-          return (
-            <ul key={`ul-${i}`} className="list-disc pl-5 my-1 space-y-0.5">
-              {b.items.map((it, j) => (
-                <li key={j}>{highlightInline(it)}</li>
-              ))}
-            </ul>
-          )
-        }
-        if (b.type === 'ol') {
-          return (
-            <ol key={`ol-${i}`} className="list-decimal pl-5 my-1 space-y-0.5">
-              {b.items.map((it, j) => (
-                <li key={j}>{highlightInline(it)}</li>
-              ))}
-            </ol>
-          )
-        }
-        const isImportant = KW_HIGHLIGHT.test(b.text) || LINE_LABELS.test(b.text)
-        return (
-          <p key={`p-${i}`} className={isImportant ? 'py-0.5 pl-2 border-l-4 border-rose-300/70 text-gray-900' : 'py-0.5'}>
+      {blocks.map((b, i) =>
+        b.type === 'ul' ? (
+          <ul key={`ul-${i}`} className="list-disc pl-5 my-1 space-y-0.5">{b.items.map((it, j) => <li key={j}>{highlightInline(it)}</li>)}</ul>
+        ) : b.type === 'ol' ? (
+          <ol key={`ol-${i}`} className="list-decimal pl-5 my-1 space-y-0.5">{b.items.map((it, j) => <li key={j}>{highlightInline(it)}</li>)}</ol>
+        ) : (
+          <p key={`p-${i}`} className={KW_H.test(b.text) || LINE_L.test(b.text) ? 'py-0.5 pl-2 border-l-4 border-rose-300/70 text-gray-900' : 'py-0.5'}>
             {highlightInline(b.text)}
           </p>
         )
-      })}
+      )}
     </div>
   )
 }
 
-/* ===== アドバイス/質問/コードの表示整形 ===== */
+/* ===== メッセージ整形 ===== */
 function parseAdviceQuestion(raw: string) {
-  const lines = normalize(raw)
-    .split('\n')
-    .map((l) => l.trim())
+  const lines = normalize(raw).split('\n').map((l) => l.trim())
   const adviceLine = lines.find((l) => /^アドバイス[:：]/.test(l)) || null
   const questionLine = lines.find((l) => /^質問[:：]/.test(l)) || null
   const codeLineIdx = lines.findIndex((l) => /^コード例[:：]/.test(l) || /^```/.test(l))
-
   const advice = adviceLine ? adviceLine.replace(/^アドバイス[:：]\s*/, '') : null
   const question = questionLine ? questionLine.replace(/^質問[:：]\s*/, '') : null
-
-  let codeBlock = ''
-  if (codeLineIdx !== -1) codeBlock = lines.slice(codeLineIdx).join('\n').replace(/^コード例[:：]\s*/, '')
-
-  const restLines = lines.filter((l, i) => {
-    if (adviceLine && l === adviceLine) return false
-    if (questionLine && l === questionLine) return false
-    if (i >= codeLineIdx && codeLineIdx !== -1) return false
-    return l.length > 0
-  })
-  const rest = restLines.join('\n')
-
+  let codeBlock = ''; if (codeLineIdx !== -1) codeBlock = lines.slice(codeLineIdx).join('\n').replace(/^コード例[:：]\s*/, '')
+  const rest = lines.filter((l, i) => !(adviceLine && l === adviceLine) && !(questionLine && l === questionLine) && !(i >= codeLineIdx && codeLineIdx !== -1)).join('\n')
   return { advice, question, codeBlock, rest }
 }
-
-const EMPHASIS = /(重要|最優先|まず|次に|初期化|確認|修正|原因|手順|注意|ポイント|必ず|だけ|正しく)/
-function emphasizeInline(text: string): ReactNode[] {
-  if (!text) return ['']
-  const out: ReactNode[] = []
-  let last = 0
-  const g = new RegExp(EMPHASIS.source, 'g')
-  let m: RegExpExecArray | null
-  while ((m = g.exec(text))) {
-    if (m.index > last) out.push(text.slice(last, m.index))
-    out.push(<strong key={`${m.index}-${m[0]}`} className="font-semibold">{m[0]}</strong>)
-    last = m.index + m[0].length
-  }
-  if (last < text.length) out.push(text.slice(last))
-  return out
+const EMP = /(重要|最優先|まず|次に|初期化|確認|修正|原因|手順|注意|ポイント|必ず|だけ|正しく)/
+const emphasizeInline = (text: string): ReactNode[] => {
+  if (!text) return ['']; const out: ReactNode[] = []; let last = 0; const g = new RegExp(EMP.source, 'g'); let m: RegExpExecArray | null
+  while ((m = g.exec(text))) { if (m.index > last) out.push(text.slice(last, m.index)); out.push(<strong key={`${m.index}-${m[0]}`} className="font-semibold">{m[0]}</strong>); last = m.index + m[0].length }
+  if (last < text.length) out.push(text.slice(last)); return out
 }
 
-/* ===== フェンス内コードの自動整形 ===== */
+/* ===== コード整形 ===== */
 function prettyCodeAuto(code: string): string {
   let s = code.replace(/\t/g, '  ').trim()
-
   const semicolons = (s.match(/;/g) || []).length
   const newlines = (s.match(/\n/g) || []).length
-  if (semicolons >= 2 && newlines <= 1) {
-    s = s
-      .split(';')
-      .map((part) => part.trim())
-      .filter(Boolean)
-      .map((part) => part + ';')
-      .join('\n')
-  }
-
-  s = s.replace(/\)\s*\{/g, ') {\n')
-  s = s.replace(/\{\s*/g, '{\n')
-  s = s.replace(/\s*\}/g, '\n}')
-  s = s.replace(/\n{3,}/g, '\n\n')
-
-  const lines = s.split('\n')
-  let depth = 0
-  const out: string[] = []
-  for (const line of lines) {
-    const trimmed = line.trim()
-    if (!trimmed) {
-      out.push('')
-      continue
-    }
-    if (/^[}\)]/.test(trimmed)) depth = Math.max(0, depth - 1)
-    out.push('  '.repeat(depth) + trimmed)
-    if (/[{]$/.test(trimmed)) depth++
-  }
+  if (semicolons >= 2 && newlines <= 1) { s = s.split(';').map((p) => p.trim()).filter(Boolean).map((p) => p + ';').join('\n') }
+  s = s.replace(/\)\s*\{/g, ') {\n').replace(/\{\s*/g, '{\n').replace(/\s*\}/g, '\n}').replace(/\n{3,}/g, '\n\n')
+  const lines = s.split('\n'); let depth = 0; const out: string[] = []
+  for (const line of lines) { const t = line.trim(); if (!t) { out.push(''); continue } ; if (/^[}\)]/.test(t)) depth = Math.max(0, depth - 1); out.push('  '.repeat(depth) + t); if (/[{]$/.test(t)) depth++ }
   return out.join('\n').replace(/\s+\n/g, '\n')
 }
 
@@ -334,26 +177,28 @@ export default function ChatPage() {
   const [gradingMode, setGradingMode] = useState(false)
   const bottomRef = useRef<HTMLDivElement | null>(null)
 
+  // ===== 解決確認（Yes/No が終わるまで送信不可） =====
+  const [waitingFeedback, setWaitingFeedback] = useState(false)
+  const [lastAssistantIndex, setLastAssistantIndex] = useState<number | null>(null)
+  const [pendingNudge, setPendingNudge] = useState<string | null>(null) // タイマー声かけの保留
+
   // 継続時間トラッキング
   const [selectStartedAt, setSelectStartedAt] = useState<number | null>(null)
   const [elapsedSec, setElapsedSec] = useState(0)
   const [nudgeCount, setNudgeCount] = useState(0)
   const pad2 = (n: number) => n.toString().padStart(2, '0')
-  const fmtHMS = (sec: number) => {
-    const h = Math.floor(sec / 3600)
-    const m = Math.floor((sec % 3600) / 60)
-    const s = sec % 60
-    return (h > 0 ? `${h}:${pad2(m)}` : `${m}`) + `:${pad2(s)}`
-  }
-  const pushAssistant = (text: string) => {
+  const fmtHMS = (sec: number) => { const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60; return (h > 0 ? `${h}:${pad2(m)}` : `${m}`) + `:${pad2(s)}` }
+
+  const pushAssistant = (text: string, { isNudge = false }: { isNudge?: boolean } = {}) => {
     if (!problem) return
-    setAllMessages(prev => {
+    if (isNudge && waitingFeedback) { setPendingNudge(text); return } // 衝突回避：保留
+    setAllMessages((prev) => {
       const cur = prev[problem.id] || []
       return { ...prev, [problem.id]: [...cur, { role: 'assistant', content: text }] }
     })
   }
 
-  // ガイドフォーム
+  // ガイドフォーム折りたたみ
   const [openHint, setOpenHint] = useState(false)
   const [openError, setOpenError] = useState(false)
 
@@ -378,7 +223,10 @@ export default function ChatPage() {
     localStorage.setItem('chatMessages', JSON.stringify(allMessages))
   }, [allMessages])
 
-  const messages: Message[] = useMemo(() => (problem ? allMessages[problem.id] || [] : []), [problem, allMessages])
+  const messages: Message[] = useMemo(
+    () => (problem ? allMessages[problem.id] || [] : []),
+    [problem, allMessages]
+  )
 
   const buildSummary = (msgs: Message[]) => {
     const summaryLimit = 500
@@ -386,40 +234,41 @@ export default function ChatPage() {
     return userText.length > summaryLimit ? userText.slice(-summaryLimit) : userText
   }
 
-  // 問題切替時の開始時刻を保持
+  // 問題切替時：タイマーと待機状態を初期化
   useEffect(() => {
     if (!problem) {
-      setSelectStartedAt(null)
-      setElapsedSec(0)
-      setNudgeCount(0)
+      setSelectStartedAt(null); setElapsedSec(0); setNudgeCount(0)
+      setWaitingFeedback(false); setLastAssistantIndex(null); setPendingNudge(null)
       return
     }
     const key = `selStart:${problem.id}`
-    const saved = localStorage.getItem(key)
-    const start = saved ? Number(saved) : Date.now()
-    setSelectStartedAt(start)
-    localStorage.setItem(key, String(start))
-    setNudgeCount(0)
+    const raw = localStorage.getItem(key); const num = raw === null ? NaN : Number(raw)
+    const start = Number.isFinite(num) ? num : Date.now()
+    setSelectStartedAt(start); localStorage.setItem(key, String(start))
+    setNudgeCount(0); setPendingNudge(null)
   }, [problem])
 
-  // 1秒タイマー＆声かけ
+  /** テスト用しきい値（本番は 20*60 / 30*60 へ） */
+  const NUDGE_FIRST = 20*60
+  const NUDGE_SECOND = 30*60
+
+  // 1秒タイマー＆声かけ（待機中は保留）
   useEffect(() => {
     if (!problem || !selectStartedAt) return
     const id = setInterval(() => {
       const sec = Math.floor((Date.now() - selectStartedAt) / 1000)
       setElapsedSec(sec)
-
-      if (sec >= 20 * 60 && nudgeCount === 0) {
-        pushAssistant('20分間取り組んでいますね。何かわからないことがあれば何でも質問してください。')
+      if (sec >= NUDGE_FIRST && nudgeCount === 0) {
+        pushAssistant('20分間取り組んでいますね。何かわからないことがあれば何でも質問してください。', { isNudge: true })
         setNudgeCount(1)
       }
-      if (sec >= 30 * 60 && nudgeCount === 1) {
-        pushAssistant('悩んでいる様子です。TAを呼んで一緒に解決しましょう。私に聞いても大丈夫です。')
+      if (sec >= NUDGE_SECOND && nudgeCount === 1) {
+        pushAssistant('悩んでいる様子です。TAを呼んで一緒に解決しましょう。私に聞いても大丈夫です。', { isNudge: true })
         setNudgeCount(2)
       }
     }, 1000)
     return () => clearInterval(id)
-  }, [problem, selectStartedAt, nudgeCount])
+  }, [problem, selectStartedAt, nudgeCount, waitingFeedback])
 
   /** 送信共通処理 */
   const sendWithContext = async (userContent: string) => {
@@ -427,8 +276,7 @@ export default function ChatPage() {
     const userMessage: Message = { role: 'user', content: userContent }
     const current = [...(allMessages[problem.id] || []), userMessage]
     setAllMessages({ ...allMessages, [problem.id]: current })
-    setInput('')
-    setLoading(true)
+    setInput(''); setLoading(true)
 
     const summary = buildSummary(current)
     const lang = detectLang(userContent, problem)
@@ -441,32 +289,21 @@ export default function ChatPage() {
 
     try {
       const res = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: contextPrompt })
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: contextPrompt }),
       })
       if (!res.body) throw new Error('No response body from API')
 
-      const reader = res.body.getReader()
-      const decoder = new TextDecoder('utf-8')
-
+      const reader = res.body.getReader(); const decoder = new TextDecoder('utf-8')
       let assistantText = ''
       const newAssistantMessage: Message = { role: 'assistant', content: '' }
-      setAllMessages((prev) => ({
-        ...prev,
-        [problem.id]: [...(prev[problem.id] || []), newAssistantMessage]
-      }))
+      setAllMessages((prev) => ({ ...prev, [problem.id]: [...(prev[problem.id] || []), newAssistantMessage] }))
 
       while (true) {
         const { value, done } = await reader.read()
         if (done) break
         const chunk = decoder.decode(value, { stream: true })
-        const lines = chunk
-          .split('\n')
-          .filter((l) => l.trim().startsWith('data: '))
-          .map((l) => l.replace(/^data: /, ''))
-          .filter((l) => l !== '' && l !== '[DONE]')
-
+        const lines = chunk.split('\n').filter((l) => l.trim().startsWith('data: ')).map((l) => l.replace(/^data: /, '')).filter((l) => l !== '' && l !== '[DONE]')
         for (const jsonStr of lines) {
           try {
             const parsed = JSON.parse(jsonStr)
@@ -479,99 +316,53 @@ export default function ChatPage() {
                 return { ...prev, [problem.id]: updated }
               })
             }
-          } catch {
-            // ストリーム断片のJSON化に失敗しても続行
-          }
+          } catch {/* ignore */}
         }
       }
+
+      // ストリーム完了：このアシスタント返信に対して解決確認を要求
+      setWaitingFeedback(true)
+      setLastAssistantIndex((allMessages[problem.id]?.length ?? 0) + 1) // 最後のassistantのインデックスを推定保存
     } catch {
       const errMsg: Message = { role: 'assistant', content: 'エラーが発生しました。' }
-      setAllMessages((prev) => ({
-        ...prev,
-        [problem.id]: [...(prev[problem.id] || []), errMsg]
-      }))
+      setAllMessages((prev) => ({ ...prev, [problem.id]: [...(prev[problem.id] || []), errMsg] }))
     } finally {
       setLoading(false)
       setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' }), 0)
     }
   }
 
-  const handleSend = async () => {
-    if (!input.trim() || !problem) return
-    await sendWithContext(input)
+  const handleSend = async () => { if (!input.trim() || !problem || waitingFeedback) return; await sendWithContext(input) }
+  const answerFeedback = (_resolved: boolean) => {
+  // 送信解禁
+  setWaitingFeedback(false)
+  setLastAssistantIndex(null)
+
+  // 保留していたタイマー通知があれば解放
+  if (pendingNudge) {
+    const text = pendingNudge
+    setPendingNudge(null)
+    setTimeout(() => pushAssistant(text), 10)
   }
-
-  const buildHintPrompt = () =>
-    [
-      '【モード】課題を進める（ヒント）',
-      hintQuestion && `【知りたいこと】\n${hintQuestion}`,
-      hintContext && `【状況/要件】\n${hintContext}`,
-      hintCode && `【途中までのコード】\n\`\`\`\n${hintCode}\n\`\`\``,
-      '【要望】直接の解答コードは出さず、次の一手を1つだけに絞ること。'
-    ]
-      .filter(Boolean)
-      .join('\n\n')
-
-  const buildErrorPrompt = () =>
-    [
-      '【モード】エラーを直す',
-      errWhere && `【エラー箇所】\n${errWhere}`,
-      errMessage && `【エラー内容/想定と異なる結果】\n${errMessage}`,
-      errCode && `【該当コード】\n\`\`\`\n${errCode}\n\`\`\``,
-      errThought && `【自分の仮説】\n${errThought}`,
-      '【要望】根本原因の仮説→確認のための観察/出力→修正方針、に沿って最優先の一手だけ。'
-    ]
-      .filter(Boolean)
-      .join('\n\n')
-
-  const handleSendHint = async () => {
-    if (problem) await sendWithContext(buildHintPrompt())
-  }
-  const handleSendError = async () => {
-    if (problem) await sendWithContext(buildErrorPrompt())
-  }
-
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages])
+}
 
   const formatMessageContent = (content: string): (string | { code: string })[] => {
     const regex = /```(?:[a-zA-Z0-9#+-]*)?\n([\s\S]*?)```/g
-    const parts: (string | { code: string })[] = []
-    let last = 0
-    let match: RegExpExecArray | null
+    const parts: (string | { code: string })[] = []; let last = 0; let match: RegExpExecArray | null
     while ((match = regex.exec(content))) {
       if (match.index > last) parts.push(content.slice(last, match.index))
-      const raw = match[1] ?? ''
-      parts.push({ code: prettyCodeAuto(raw) })
-      last = regex.lastIndex
+      const raw = match[1] ?? ''; parts.push({ code: prettyCodeAuto(raw) }); last = regex.lastIndex
     }
     if (last < content.length) parts.push(content.slice(last))
     return parts
   }
 
-  const hintEmpty = !hintQuestion.trim() && !hintCode.trim() && !hintContext.trim()
-  const errEmpty = !errWhere.trim() && !errMessage.trim() && !errCode.trim() && !errThought.trim()
-
-  /* === 選択範囲を ``` で囲むユーティリティ（必要ならボタンから呼ぶ） === */
-  const wrapSelectionWithFence = (el: HTMLTextAreaElement | null) => {
-    if (!el) return
-    const start = el.selectionStart ?? 0
-    const end = el.selectionEnd ?? 0
-    if (start === end) return
-    const text = input
-    const selected = text.slice(start, end)
-    const wrapped = '```\n' + selected + '\n```'
-    const next = text.slice(0, start) + wrapped + text.slice(end)
-    setInput(next)
-    requestAnimationFrame(() => {
-      el.selectionStart = start
-      el.selectionEnd = start + wrapped.length
-      el.focus()
-    })
-  }
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [messages, waitingFeedback])
 
   /* ============ 画面描画 ============ */
+  const sendDisabled = !problem || loading || waitingFeedback
   return (
     <>
       <main className="flex h-screen">
@@ -605,12 +396,21 @@ export default function ChatPage() {
           <div className="flex items-center justify-between mb-2">
             <h1 className="text-xl font-bold">{problem?.title || '問題未選択'}</h1>
             <div className="flex items-center gap-3">
-              {problem && (
-                <span className="text-xs px-2 py-1 rounded border bg-white">⏱ 継続: {fmtHMS(elapsedSec)}</span>
-              )}
-              <Link href="/settings" className="border px-3 py-1 rounded text-sm hover:bg-gray-50">
-                ユーザ情報を変更
-              </Link>
+              {problem && <span className="text-xs px-2 py-1 rounded border bg-white">⏱ 継続: {fmtHMS(elapsedSec)}</span>}
+              <button
+                className={`border px-2 py-1 rounded text-xs ${waitingFeedback ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-50'}`}
+                onClick={() => {
+                  if (!problem || waitingFeedback) return
+                  const now = Date.now()
+                  setSelectStartedAt(now)
+                  localStorage.setItem(`selStart:${problem.id}`, String(now))
+                  setElapsedSec(0); setNudgeCount(0)
+                }}
+                disabled={waitingFeedback}
+              >
+                タイマー再開
+              </button>
+              <Link href="/settings" className="border px-3 py-1 rounded text-sm hover:bg-gray-50">ユーザ情報を変更</Link>
             </div>
           </div>
 
@@ -622,107 +422,47 @@ export default function ChatPage() {
                 className="sr-only peer"
                 checked={gradingMode}
                 onChange={(e) => setGradingMode(e.target.checked)}
+                disabled={waitingFeedback}
               />
-              <div className="w-11 h-6 bg-gray-200 rounded-full peer peer-checked:bg-green-500 transition-all" />
-              <div className="absolute left-0.5 top-0.5 w-5 h-5 bg-white rounded-full shadow peer-checked:translate-x-full transition-all" />
+              <div className={`w-11 h-6 rounded-full transition-all ${waitingFeedback ? 'bg-gray-300' : 'bg-gray-200 peer-checked:bg-green-500'}`} />
+              <div className={`absolute left-0.5 top-0.5 w-5 h-5 bg-white rounded-full shadow transition-all ${gradingMode ? 'translate-x-full' : ''}`} />
             </label>
             <span className={gradingMode ? 'font-bold' : 'text-gray-400'}>採点モード</span>
+            {waitingFeedback && <span className="ml-3 text-xs text-rose-600">※ 解決確認に回答するまで送信できません</span>}
           </div>
 
-          {/* ガイドフォーム */}
+          {/* ガイドフォーム（待機中は操作不可） */}
           <div className="space-y-3 mb-3">
-            {/* 課題を進める */}
-            <div className={`border rounded-lg ${gradingMode ? 'opacity-50 pointer-events-none' : ''}`}>
-              <button
-                className="w-full flex justify-between items-center px-3 py-2 text-left"
-                onClick={() => setOpenHint((v) => !v)}
-                disabled={!problem || gradingMode}
-              >
+            <div className={`border rounded-lg ${gradingMode ? 'opacity-50 pointer-events-none' : ''} ${waitingFeedback ? 'opacity-50 pointer-events-none' : ''}`}>
+              <button className="w-full flex justify-between items-center px-3 py-2 text-left" onClick={() => setOpenHint((v) => !v)} disabled={!problem || gradingMode || waitingFeedback}>
                 <span className="font-semibold">🧭 課題を進める（ヒント）</span>
                 <span className="text-sm text-gray-500">{openHint ? '閉じる' : '開く'}</span>
               </button>
               {openHint && (
                 <div className="px-3 pb-3 space-y-2">
-                  <input
-                    className="w-full border p-2 rounded"
-                    placeholder="何を知りたい？"
-                    value={hintQuestion}
-                    onChange={(e) => setHintQuestion(e.target.value)}
-                  />
-                  <textarea
-                    className="w-full border p-2 rounded h-24"
-                    placeholder="（任意）現在の状況/要件"
-                    value={hintContext}
-                    onChange={(e) => setHintContext(e.target.value)}
-                  />
-                  <textarea
-                    className="w-full border p-2 rounded h-32 font-mono"
-                    placeholder="途中までのコード"
-                    value={hintCode}
-                    onChange={(e) => setHintCode(e.target.value)}
-                  />
+                  <input className="w-full border p-2 rounded" placeholder="何を知りたい？" value={hintQuestion} onChange={(e) => setHintQuestion(e.target.value)} />
+                  <textarea className="w-full border p-2 rounded h-24" placeholder="（任意）現在の状況/要件" value={hintContext} onChange={(e) => setHintContext(e.target.value)} />
+                  <textarea className="w-full border p-2 rounded h-32 font-mono" placeholder="途中までのコード" value={hintCode} onChange={(e) => setHintCode(e.target.value)} />
                   <div className="flex justify-end">
-                    <button
-                      className="bg-blue-600 text-white px-4 py-2 rounded disabled:opacity-50"
-                      onClick={handleSendHint}
-                      disabled={loading || !problem || gradingMode || ( !hintQuestion.trim() && !hintCode.trim() && !hintContext.trim() )}
-                    >
-                      送信（ヒント）
-                    </button>
+                    <button className="bg-blue-600 text-white px-4 py-2 rounded disabled:opacity-50" onClick={() => problem && sendWithContext(['【モード】課題を進める（ヒント）', hintQuestion && `【知りたいこと】\n${hintQuestion}`, hintContext && `【状況/要件】\n${hintContext}`, hintCode && `【途中までのコード】\n\`\`\`\n${hintCode}\n\`\`\``, '【要望】直接の解答コードは出さず、次の一手を1つだけに絞ること。'].filter(Boolean).join('\n\n'))} disabled={sendDisabled || (!hintQuestion.trim() && !hintCode.trim() && !hintContext.trim())}>送信（ヒント）</button>
                   </div>
                 </div>
               )}
             </div>
 
-            {/* エラーを直す */}
-            <div className={`border rounded-lg ${gradingMode ? 'opacity-50 pointer-events-none' : ''}`}>
-              <button
-                className="w-full flex justify-between items-center px-3 py-2 text-left"
-                onClick={() => setOpenError((v) => !v)}
-                disabled={!problem || gradingMode}
-              >
+            <div className={`border rounded-lg ${gradingMode ? 'opacity-50 pointer-events-none' : ''} ${waitingFeedback ? 'opacity-50 pointer-events-none' : ''}`}>
+              <button className="w-full flex justify-between items-center px-3 py-2 text-left" onClick={() => setOpenError((v) => !v)} disabled={!problem || gradingMode || waitingFeedback}>
                 <span className="font-semibold">🛠️ エラーを直す</span>
                 <span className="text-sm text-gray-500">{openError ? '閉じる' : '開く'}</span>
               </button>
               {openError && (
                 <div className="px-3 pb-3 space-y-2">
-                  <input
-                    className="w-full border p-2 rounded"
-                    placeholder="（任意）エラー箇所（例: Main.javaの25行目）"
-                    value={errWhere}
-                    onChange={(e) => setErrWhere(e.target.value)}
-                  />
-                  <textarea
-                    className="w-full border p-2 rounded h-20"
-                    placeholder="エラーメッセージ/想定と異なる結果"
-                    value={errMessage}
-                    onChange={(e) => setErrMessage(e.target.value)}
-                  />
-                  <textarea
-                    className="w-full border p-2 rounded h-32 font-mono"
-                    placeholder="該当コード"
-                    value={errCode}
-                    onChange={(e) => setErrCode(e.target.value)}
-                  />
-                  <textarea
-                    className="w-full border p-2 rounded h-20"
-                    placeholder="（任意）自分の仮説"
-                    value={errThought}
-                    onChange={(e) => setErrThought(e.target.value)}
-                  />
+                  <input className="w-full border p-2 rounded" placeholder="（任意）エラー箇所" value={errWhere} onChange={(e) => setErrWhere(e.target.value)} />
+                  <textarea className="w-full border p-2 rounded h-20" placeholder="エラーメッセージ/想定と異なる結果" value={errMessage} onChange={(e) => setErrMessage(e.target.value)} />
+                  <textarea className="w-full border p-2 rounded h-32 font-mono" placeholder="該当コード" value={errCode} onChange={(e) => setErrCode(e.target.value)} />
+                  <textarea className="w-full border p-2 rounded h-20" placeholder="（任意）自分の仮説" value={errThought} onChange={(e) => setErrThought(e.target.value)} />
                   <div className="flex justify-end">
-                    <button
-                      className="bg-blue-600 text-white px-4 py-2 rounded disabled:opacity-50"
-                      onClick={handleSendError}
-                      disabled={
-                        loading ||
-                        !problem ||
-                        gradingMode ||
-                        (!errWhere.trim() && !errMessage.trim() && !errCode.trim() && !errThought.trim())
-                      }
-                    >
-                      送信（エラー診断）
-                    </button>
+                    <button className="bg-blue-600 text-white px-4 py-2 rounded disabled:opacity-50" onClick={() => problem && sendWithContext(['【モード】エラーを直す', errWhere && `【エラー箇所】\n${errWhere}`, errMessage && `【エラー内容/想定と異なる結果】\n${errMessage}`, errCode && `【該当コード】\n\`\`\`\n${errCode}\n\`\`\``, errThought && `【自分の仮説】\n${errThought}`, '【要望】根本原因の仮説→観察/出力→修正方針の最優先の一手だけ。'].filter(Boolean).join('\n\n'))} disabled={sendDisabled || (!errWhere.trim() && !errMessage.trim() && !errCode.trim() && !errThought.trim())}>送信（エラー診断）</button>
                   </div>
                 </div>
               )}
@@ -732,71 +472,73 @@ export default function ChatPage() {
           {/* メッセージ表示 */}
           <div className="flex-1 space-y-4 overflow-y-auto">
             {messages.map((msg: Message, idx: number) => {
-              if (msg.role === 'assistant') {
+              const bubble = (
+                <div className={`p-3 rounded max-w-[75%] whitespace-pre-wrap break-words ${msg.role === 'user' ? 'bg-blue-100' : 'bg-green-50'}`}>
+                  {(() => {
+                    const parts = (() => {
+                      const regex = /```(?:[a-zA-Z0-9#+-]*)?\n([\s\S]*?)```/g
+                      const res: (string | { code: string })[] = []; let last = 0; let m: RegExpExecArray | null
+                      while ((m = regex.exec(msg.content))) { if (m.index > last) res.push(msg.content.slice(last, m.index)); res.push({ code: prettyCodeAuto(m[1] ?? '') }); last = regex.lastIndex }
+                      if (last < msg.content.length) res.push(msg.content.slice(last))
+                      return res
+                    })()
+                    return parts.map((p, i) =>
+                      typeof p === 'string' ? <p key={i}>{p}</p> :
+                        <pre key={i} className="bg-gray-200 p-2 rounded overflow-x-auto text-sm"><code>{p.code}</code></pre>
+                    )
+                  })()}
+                </div>
+              )
+
+              // assistant の直後に解決確認 UI
+              if (msg.role === 'assistant' && waitingFeedback && (lastAssistantIndex === null || idx >= (lastAssistantIndex ?? 0))) {
                 const { advice, question, codeBlock, rest } = parseAdviceQuestion(msg.content)
-                const restParts = rest ? formatMessageContent(rest) : []
                 return (
-                  <div key={idx} className="flex justify-start">
-                    <div className="p-3 rounded max-w-[75%] bg-green-50 whitespace-pre-wrap break-words space-y-2">
-                      {advice && <p className="leading-relaxed">{emphasizeInline(advice)}</p>}
-                      {question && <p className="leading-relaxed font-semibold">{emphasizeInline(question)}</p>}
-                      {codeBlock && (
-                        <div>
-                          {formatMessageContent(codeBlock).map((part, i) =>
-                            typeof part === 'string' ? (
-                              <p key={i}>{part}</p>
-                            ) : (
-                              <pre key={i} className="bg-gray-200 p-2 rounded overflow-x-auto text-sm">
-                                <code>{part.code}</code>
-                              </pre>
-                            )
-                          )}
-                        </div>
-                      )}
-                      {restParts.length > 0 &&
-                        restParts.map((part, i) =>
-                          typeof part === 'string' ? (
-                            <p key={i}>{part}</p>
-                          ) : (
-                            <pre key={i} className="bg-gray-200 p-2 rounded overflow-x-auto text-sm">
-                              <code>{part.code}</code>
-                            </pre>
-                          )
+                  <div key={idx} className="space-y-2">
+                    <div className="flex justify-start">
+                      <div className="p-3 rounded max-w-[75%] bg-green-50 whitespace-pre-wrap break-words space-y-2">
+                        {advice && <p className="leading-relaxed">{emphasizeInline(advice)}</p>}
+                        {question && <p className="leading-relaxed font-semibold">{emphasizeInline(question)}</p>}
+                        {codeBlock && (
+                          <div>
+                            {formatMessageContent(codeBlock).map((part, i) =>
+                              typeof part === 'string' ? <p key={i}>{part}</p> :
+                                <pre key={i} className="bg-gray-200 p-2 rounded overflow-x-auto text-sm"><code>{part.code}</code></pre>
+                            )}
+                          </div>
                         )}
+                        {rest && <p>{rest}</p>}
+                      </div>
+                    </div>
+                    {/* 解決確認 UI */}
+                    <div className="flex justify-start">
+                      <div className="bg-amber-50 border border-amber-200 text-amber-900 rounded px-3 py-2 text-sm flex items-center gap-2">
+                        <span>この回答で問題は解決できましたか？</span>
+                        <button className="px-2 py-1 rounded bg-emerald-600 text-white hover:opacity-90" onClick={() => answerFeedback(true)}>はい</button>
+                        <button className="px-2 py-1 rounded bg-rose-600 text-white hover:opacity-90" onClick={() => answerFeedback(false)}>いいえ</button>
+                      </div>
                     </div>
                   </div>
                 )
               }
+
               return (
                 <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                  <div
-                    className={`p-3 rounded max-w-[75%] whitespace-pre-wrap break-words ${
-                      msg.role === 'user' ? 'bg-blue-100' : 'bg-green-50'
-                    }`}
-                  >
-                    {formatMessageContent(msg.content).map((part, i) =>
-                      typeof part === 'string' ? (
-                        <p key={i}>{part}</p>
-                      ) : (
-                        <pre key={i} className="bg-gray-200 p-2 rounded overflow-x-auto text-sm">
-                          <code>{part.code}</code>
-                        </pre>
-                      )
-                    )}
-                  </div>
+                  {bubble}
                 </div>
               )
             })}
             <div ref={bottomRef} />
           </div>
 
-          {/* 自由入力（オートリサイズのみ） */}
+          {/* 自由入力 */}
           <div className="mt-4">
             <AutoGrowTextarea
               value={input}
-              placeholder={problem ? '自由入力（Enterで送信、Shift+Enterで改行 / Tabでインデント）' : 'まず問題を選んでください'}
+              placeholder={problem ? (waitingFeedback ? '（まず「解決できましたか？」に回答してください）' : '自由入力（Enterで送信、Shift+Enterで改行 / Tabでインデント）') : 'まず問題を選んでください'}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => {
+                if (waitingFeedback) return
                 if (e.key === 'Tab') {
                   e.preventDefault()
                   const el = e.currentTarget
@@ -805,34 +547,18 @@ export default function ChatPage() {
                   const indent = '  '
                   const next = input.slice(0, start) + indent + input.slice(end)
                   setInput(next)
-                  requestAnimationFrame(() => {
-                    el.selectionStart = el.selectionEnd = start + indent.length
-                  })
+                  requestAnimationFrame(() => { el.selectionStart = el.selectionEnd = start + indent.length })
                 }
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault()
-                  handleSend()
-                }
+                if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend() }
               }}
               maxVh={70}
+              disabled={waitingFeedback || !problem}
             />
             <div className="mt-1 flex items-center justify-between text-xs text-gray-600">
               <div>{input.split('\n').length} 行 / {input.length} 文字</div>
-              <div className="space-x-2">
-                <button
-                  className="border px-2 py-1 rounded hover:bg-gray-50"
-                  onClick={() => wrapSelectionWithFence(document.activeElement as HTMLTextAreaElement)}
-                >
-                  選択を```で囲む
-                </button>
-                <button
-                  className="bg-blue-600 text-white px-4 py-2 rounded disabled:opacity-50"
-                  onClick={handleSend}
-                  disabled={!input.trim() || loading || !problem}
-                >
-                  {loading ? '送信中...' : '自由入力で送信'}
-                </button>
-              </div>
+              <button className="bg-blue-600 text-white px-4 py-2 rounded disabled:opacity-50" onClick={handleSend} disabled={sendDisabled || !input.trim()}>
+                {loading ? '送信中...' : '自由入力で送信'}
+              </button>
             </div>
           </div>
         </div>
