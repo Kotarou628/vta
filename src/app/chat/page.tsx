@@ -322,7 +322,7 @@ function extractFromSource(code: string, intent: ExtractIntent): string {
   let m: RegExpExecArray | null
   while ((m = blockRegex.exec(classBody)) !== null) {
     const header = (m[1] || '').trim()
-    const name   = (m[2] || '').trim()
+    const name   = (m[2] || '').trim()   // ← 修正ポイント
     const params = (m[3] || '')
     let i = m.index + m[0].length
     let depth = 1
@@ -432,6 +432,29 @@ export default function ChatPage() {
     })
   }
 
+  // 途中表示用: ストリーミング更新ユーティリティ
+  const createStreamingAssistant = (initial = '') => {
+    if (!problem) return null
+    setAllMessages(prev => {
+      const cur = prev[problem.id] || []
+      return { ...prev, [problem.id]: [...cur, { role: 'assistant', content: initial }] }
+    })
+    return true
+  }
+  const updateLastAssistant = (text: string | ((prev: string) => string)) => {
+    if (!problem) return
+    setAllMessages(prev => {
+      const cur = prev[problem.id] || []
+      if (cur.length === 0) return prev
+      const idx = cur.length - 1
+      const old = cur[idx]
+      const next = typeof text === 'function' ? (text as any)(old.content) : text
+      const arr = cur.slice()
+      arr[idx] = { ...old, content: next }
+      return { ...prev, [problem.id]: arr }
+    })
+  }
+
   // 折りたたみフォーム
   const [openHint, setOpenHint] = useState(false)
   const [openError, setOpenError] = useState(false)
@@ -503,7 +526,7 @@ export default function ChatPage() {
     return () => clearInterval(id)
   }, [problem, selectStartedAt, nudgeCount, waitingFeedback])
 
-  /** 送信共通処理（通常モードに抽象化連携を内包） */
+  /** 送信共通処理（途中生成を順次表示するストリーミング版） */
   const sendWithContext = async (userContent: string) => {
     if (!userContent.trim() || !problem) return
     const userMessage: Message = { role: 'user', content: userContent }
@@ -524,8 +547,27 @@ export default function ChatPage() {
 
     setLoading(true)
 
+    // 途中表示のプレースホルダ
+    createStreamingAssistant('生成中…')
+    let advicePreview = ''
+    let questionPreview = ''
+    let codeLang = langGuess || 'java'
+    let abstractBuffer = ''
+    let lastFlush = 0
+    const renderNow = () => {
+      const head: string[] = []
+      if (advicePreview) head.push(`アドバイス: ${advicePreview}`)
+      if (questionPreview) head.push(`質問: ${questionPreview}`)
+      const headText = head.length ? head.join('\n\n') + '\n\n' : ''
+      const codePart =
+        abstractBuffer
+          ? `コード例:\n\`\`\`${codeLang}\n${prettyCodeAuto(abstractBuffer)}\n\`\`\``
+          : 'コード例:\n```\n（抽象化コードを生成中…）\n```'
+      updateLastAssistant(headText + codePart)
+    }
+
     try {
-      // ===== 1) 助言/逆質問の取得（教員プロンプト）
+      // 1) 教員プロンプト（ストリーム）
       const teacherPrompt = `${BASE_TEACHER_PROMPT(langGuess)}
 
 【問題文】
@@ -541,9 +583,6 @@ ${summary}
 ${userContent}
 
 ${outputRule(langGuess)}`
-      console.groupCollapsed('[DEBUG] 送信プロンプト: 教員（アドバイス/逆質問）')
-      console.log(teacherPrompt)
-      console.groupEnd()
 
       const res1 = await fetch('/api/chat', {
         method: 'POST',
@@ -552,7 +591,7 @@ ${outputRule(langGuess)}`
       })
       if (!res1.body) throw new Error('No response body from API (teacher step)')
 
-      let teacherReply = ''
+      let teacherRaw = ''
       {
         const reader = res1.body.getReader()
         const decoder = new TextDecoder('utf-8')
@@ -567,42 +606,37 @@ ${outputRule(langGuess)}`
           for (const jsonStr of lines) {
             try {
               const parsed = JSON.parse(jsonStr)
-              const delta = parsed.choices?.[0]?.delta?.content
-              if (delta) teacherReply += delta
+              const delta = parsed.choices?.[0]?.delta?.content || ''
+              if (!delta) continue
+              teacherRaw += delta
+              const a = teacherRaw.match(/(?:^|\n)アドバイス[:：]\s*([^\n]+)/)
+              const q = teacherRaw.match(/(?:^|\n)質問[:：]\s*([^\n?]+[?？]?)/)
+              advicePreview = a ? a[1].trim() : advicePreview
+              questionPreview = q ? q[1].trim() : questionPreview
+              renderNow()
             } catch { /* ignore */ }
           }
         }
       }
 
-      console.groupCollapsed('[DEBUG] 受信: 教員応答（生テキスト）')
-      console.log(teacherReply)
-      console.groupEnd()
-
-      const { advice, question } = parseAdviceQuestion(teacherReply)
-
-      // ===== 2) 先生が示したコードブロックをそのまま抽象化へ（最適ブロックを選択）
+      // 2) 抽出スニペット決定
       let snippet = ''
-      let lang = langGuess
-      const picked = getBestCodeBlock(teacherReply, langGuess)
+      const picked = getBestCodeBlock(teacherRaw, langGuess)
       if (picked && picked.code.trim()) {
         snippet = picked.code
-        lang = picked.lang || langGuess
-        console.log('[DEBUG] 抽象化に使用: 教員応答の最適コードブロック')
+        codeLang = picked.lang || codeLang
       } else {
-        // なければ solution_files から抽出（従来フォールバック）
         const intent = deriveIntent(userContent)
         const ex = extractFromProblem(problem, intent)
         snippet = ex.snippet
-        lang = ex.lang || langGuess
-        console.log('[DEBUG] 抽象化に使用: solution_files からの抽出スニペット')
+        codeLang = ex.lang || codeLang
       }
+      if (!advicePreview) advicePreview = 'インスタンスフィールドの宣言とコンストラクタの役割を整理しましょう。'
+      if (!questionPreview) questionPreview = 'どのフィールドをどの初期値で宣言しますか？'
+      renderNow()
 
-      // ===== 3) 抽象化の実行（抽象化プロンプト: コードのみ）
-      const abstractPrompt = buildAbstractPrompt(lang || langGuess || 'java', snippet)
-      console.groupCollapsed('[DEBUG] 送信プロンプト: 抽象化')
-      console.log(abstractPrompt)
-      console.groupEnd()
-
+      // 3) 抽象化（ストリーム）
+      const abstractPrompt = buildAbstractPrompt(codeLang, snippet)
       const res2 = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -610,10 +644,10 @@ ${outputRule(langGuess)}`
       })
       if (!res2.body) throw new Error('No response body from API (abstract step)')
 
-      let abstractReply = ''
       {
         const reader = res2.body.getReader()
         const decoder = new TextDecoder('utf-8')
+        let insideFence = false
         while (true) {
           const { value, done } = await reader.read()
           if (done) break
@@ -625,39 +659,35 @@ ${outputRule(langGuess)}`
           for (const jsonStr of lines) {
             try {
               const parsed = JSON.parse(jsonStr)
-              const delta = parsed.choices?.[0]?.delta?.content
-              if (delta) abstractReply += delta
+              const delta = parsed.choices?.[0]?.delta?.content || ''
+              if (!delta) continue
+
+              const open = delta.match(/```([\w#+-]*)\s*$/)
+              const close = delta.match(/```/)
+              if (open && !insideFence) {
+                if (open[1]) codeLang = open[1]
+                insideFence = true
+              } else if (insideFence && close) {
+                insideFence = false
+              } else if (insideFence || delta.trim()) {
+                abstractBuffer += delta
+              }
+
+              const now = performance.now()
+              if (now - lastFlush > 200) { lastFlush = now; renderNow() }
             } catch { /* ignore */ }
           }
         }
       }
 
-      console.groupCollapsed('[DEBUG] 受信: 抽象化応答（生テキスト）')
-      console.log(abstractReply)
-      console.groupEnd()
-
-      const fenced = getFirstCodeBlock(abstractReply)
-      const abstractCode = prettyCodeAuto(fenced?.code || abstractReply) // 念のため整形
-
-      // ===== 4) まとめて学生に表示（アドバイス + 質問 + 抽象化コード）
-      const parts: string[] = []
-      if (advice) parts.push(`アドバイス: ${advice}`)
-      parts.push(`質問: ${question || 'どの部分でつまずいていますか？'}`)
-      parts.push(`コード例:\n\`\`\`${(fenced?.lang || lang || 'java')}\n${abstractCode}\n\`\`\``)
-      const finalMessage = parts.join('\n\n')
-
-      const newAssistantMessage: Message = { role: 'assistant', content: finalMessage }
-      setAllMessages((prev) => {
-        const cur = prev[problem.id] || []
-        return { ...prev, [problem.id]: [...cur, newAssistantMessage] }
-      })
-
-      setWaitingFeedback(true)
+      // 4) 完了後にのみアンケート有効化
+      renderNow()
       setLastAssistantIndex((allMessages[problem.id]?.length ?? 0) + 1)
+      setWaitingFeedback(true)
     } catch (e) {
       console.error('[ERROR] 通常モード統合フロー失敗:', e)
-      const errMsg: Message = { role: 'assistant', content: '処理中にエラーが発生しました。もう一度お試しください。' }
-      setAllMessages((prev) => ({ ...prev, [problem.id]: [...(prev[problem.id] || []), errMsg] }))
+      updateLastAssistant('処理中にエラーが発生しました。もう一度お試しください。')
+      setWaitingFeedback(false)
     } finally {
       setLoading(false)
       setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' }), 0)
@@ -763,65 +793,6 @@ ${outputRule(langGuess)}`
             {waitingFeedback && <span className="text-xs text-rose-600">※ 解決確認に回答するまで送信できません</span>}
           </div>
 
-          {/* ガイドフォーム */}
-          <div className="space-y-3 mb-3">
-            <div className={`border rounded-lg ${waitingFeedback ? 'opacity-50 pointer-events-none' : ''}`}>
-              <button className="w-full flex justify-between items-center px-3 py-2 text-left" onClick={() => setOpenHint((v) => !v)} disabled={!problem || waitingFeedback}>
-                <span className="font-semibold">🧭 課題を進める（ヒント）</span>
-                <span className="text-sm text-gray-500">{openHint ? '閉じる' : '開く'}</span>
-              </button>
-              {openHint && (
-                <div className="px-3 pb-3 space-y-2">
-                  <input className="w-full border p-2 rounded" placeholder="何を知りたい？" value={hintQuestion} onChange={(e) => setHintQuestion(e.target.value)} />
-                  <textarea className="w-full border p-2 rounded h-24" placeholder="（任意）現在の状況/要件" value={hintContext} onChange={(e) => setHintContext(e.target.value)} />
-                  <textarea className="w-full border p-2 rounded h-32 font-mono" placeholder="途中までのコード" value={hintCode} onChange={(e) => setHintCode(e.target.value)} />
-                  <div className="flex justify-end">
-                    <button className="bg-blue-600 text-white px-4 py-2 rounded disabled:opacity-50"
-                      onClick={() => problem && sendWithContext([
-                        '【モード】課題を進める（ヒント）',
-                        hintQuestion && `【知りたいこと】\n${hintQuestion}`,
-                        hintContext && `【状況/要件】\n${hintContext}`,
-                        hintCode && `【途中までのコード】\n\`\`\`\n${hintCode}\n\`\`\``,
-                        '【要望】直接の解答コードは出さず、次の一手を1つだけに絞ること。'
-                      ].filter(Boolean).join('\n\n'))}
-                      disabled={(!hintQuestion.trim() && !hintCode.trim() && !hintContext.trim()) || waitingFeedback}>
-                      送信（ヒント）
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <div className={`border rounded-lg ${waitingFeedback ? 'opacity-50 pointer-events-none' : ''}`}>
-              <button className="w-full flex justify-between items-center px-3 py-2 text-left" onClick={() => setOpenError((v) => !v)} disabled={!problem || waitingFeedback}>
-                <span className="font-semibold">🛠️ エラーを直す</span>
-                <span className="text-sm text-gray-500">{openError ? '閉じる' : '開く'}</span>
-              </button>
-              {openError && (
-                <div className="px-3 pb-3 space-y-2">
-                  <input className="w-full border p-2 rounded" placeholder="（任意）エラー箇所" value={errWhere} onChange={(e) => setErrWhere(e.target.value)} />
-                  <textarea className="w-full border p-2 rounded h-20" placeholder="エラーメッセージ/想定と異なる結果" value={errMessage} onChange={(e) => setErrMessage(e.target.value)} />
-                  <textarea className="w-full border p-2 rounded h-32 font-mono" placeholder="該当コード" value={errCode} onChange={(e) => setErrCode(e.target.value)} />
-                  <textarea className="w-full border p-2 rounded h-20" placeholder="（任意）自分の仮説" value={errThought} onChange={(e) => setErrThought(e.target.value)} />
-                  <div className="flex justify-end">
-                    <button className="bg-blue-600 text-white px-4 py-2 rounded disabled:opacity-50"
-                      onClick={() => problem && sendWithContext([
-                        '【モード】エラーを直す',
-                        errWhere && `【エラー箇所】\n${errWhere}`,
-                        errMessage && `【エラー内容/想定と異なる結果】\n${errMessage}`,
-                        errCode && `【該当コード】\n\`\`\`\n${errCode}\n\`\`\``,
-                        errThought && `【自分の仮説】\n${errThought}`,
-                        '【要望】根本原因の仮説→観察/出力→修正方針の最優先の一手だけ。'
-                      ].filter(Boolean).join('\n\n'))}
-                      disabled={(!errWhere.trim() && !errMessage.trim() && !errCode.trim() && !errThought.trim()) || waitingFeedback}>
-                      送信（エラー診断）
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-
           {/* メッセージ表示 */}
           <div className="flex-1 space-y-4 overflow-y-auto">
             {messages.map((msg: Message, idx: number) => {
@@ -847,6 +818,7 @@ ${outputRule(langGuess)}`
                 </div>
               )
 
+              // 完了後のみアンケート表示
               if (msg.role === 'assistant' && waitingFeedback && (lastAssistantIndex === null || idx >= (lastAssistantIndex ?? 0))) {
                 const { advice, question, codeBlock, rest } = parseAdviceQuestion(msg.content)
                 return (
