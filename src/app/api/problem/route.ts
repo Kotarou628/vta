@@ -1,6 +1,7 @@
 // src/app/api/problem/route.ts
 import { db } from '@/lib/firebase-admin'
 import { NextResponse } from 'next/server'
+import admin from 'firebase-admin' // ★追加：FieldValue.delete を使う場合に必要
 
 type SolutionFile = {
   filename: string
@@ -8,14 +9,15 @@ type SolutionFile = {
   code: string
 }
 
+// 改行正規化（構造は維持されます）
+const normalizeNewlines = (s: string) => s.replace(/\r\n?/g, '\n')
+
 export async function GET() {
-  // Firestore の order フィールドで昇順ソートして取得
   const snapshot = await db.collection('problem').orderBy('order').get()
 
   const problems = snapshot.docs.map((doc) => {
     const data = doc.data() as any
 
-    // 後方互換: solution_files がなければ solution_code を 1 要素配列に変換して返す
     const solution_files: SolutionFile[] =
       Array.isArray(data.solution_files) && data.solution_files.length > 0
         ? data.solution_files
@@ -28,9 +30,8 @@ export async function GET() {
       title: data.title ?? '',
       description: data.description ?? '',
       order: data.order ?? 0,
-      // 旧フィールドは残す（既存UI互換）
+      // 読み取り互換は維持（UIで使っているなら）
       solution_code: data.solution_code ?? '',
-      // 新フィールドを常に返す
       solution_files,
     }
   })
@@ -40,39 +41,44 @@ export async function GET() {
 
 export async function POST(req: Request) {
   const body = await req.json()
+
   const { title, description } = body as {
     title: string
     description: string
   }
 
-  let { solution_code, solution_files } = body as {
-    solution_code?: string
+  // ここからは **solution_files を正** とします
+  let { solution_files } = body as {
     solution_files?: SolutionFile[]
   }
 
-  // 後方互換:
-  // - solution_files が未指定/空のとき、solution_code があれば 1 要素に畳み込む
-  if (!Array.isArray(solution_files) || solution_files.length === 0) {
-    if (typeof solution_code === 'string' && solution_code.length > 0) {
-      solution_files = [{ filename: '', language: '', code: solution_code }]
-    } else {
-      solution_files = []
-    }
-  }
+  // 空配列なら空配列で保存（solution_code は使わない）
+  if (!Array.isArray(solution_files)) solution_files = []
 
-  // 既存ドキュメント数から order を設定
+  // 改行正規化のみ（構造は保持）
+  const normalized_files: SolutionFile[] = solution_files.map((f) => ({
+    filename: f.filename ?? '',
+    language: f.language ?? '',
+    code: typeof f.code === 'string' ? normalizeNewlines(f.code) : '',
+  }))
+
+  // order
   const snapshot = await db.collection('problem').get()
   const currentCount = snapshot.size
 
-  const docRef = await db.collection('problem').add({
+  const payload: any = {
     title,
     description,
-    // 旧フィールドも保存（過去画面互換のため）
-    solution_code: typeof solution_code === 'string' ? solution_code : '',
-    // 新フィールドを正として保存
-    solution_files,
+    solution_files: normalized_files,
     order: currentCount,
-  })
+    // ★ 互換フィールドは保存しない（新規は常に空／または削除）
+    solution_code: '',
+  }
+
+  const docRef = await db.collection('problem').add(payload)
+
+  // ★オプション：互換フィールドを「物理削除」したい場合は以下を有効化
+  // await docRef.update({ solution_code: admin.firestore.FieldValue.delete() })
 
   return NextResponse.json({ id: docRef.id })
 }
