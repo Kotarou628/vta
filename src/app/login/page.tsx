@@ -5,20 +5,55 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { signInWithEmailAndPassword } from 'firebase/auth';
-import { auth } from '@/lib/firebase';
+import { auth, db } from '@/lib/firebase';
 import { idToEmail } from '@/lib/nameToEmail';
+import { doc, setDoc } from 'firebase/firestore';
 
-/** 席番号の正規化（全角→半角、英字大文字化、前後空白除去） */
+/** 全角→半角・前後空白除去・英字大文字化 */
 const normalizeSeat = (raw: string) =>
-  raw
+  (raw || '')
     .replace(/[Ａ-Ｚａ-ｚ０-９]/g, (s) =>
       String.fromCharCode(s.charCodeAt(0) - 0xfee0)
     )
     .trim()
     .toUpperCase();
 
-/** A〜L + 01〜08 の形式だけ許可（必要なら範囲を調整） */
+/** A〜L + 01〜08 のみ許可（必要に応じて調整） */
 const isValidSeat = (seat: string) => /^[A-L](0[1-8])$/.test(seat);
+
+/** できるだけ多くの場所に保存（chat 画面の探索ロジックと互換） */
+async function saveSeatEverywhere(seat: string) {
+  try {
+    // local/sessionStorage
+    localStorage.setItem('seatNumber', seat);
+    localStorage.setItem('seat', seat);
+    localStorage.setItem('userSettings', JSON.stringify({ seatNumber: seat }));
+    sessionStorage.setItem('seat', seat);
+
+    // セッションAPI（サーバー側で使うなら）
+    await fetch('/api/session/seat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ seat }),
+    });
+  } catch {
+    // Storageやfetch失敗は致命的でないので握りつぶす
+  }
+
+  // Firestore の /users/{uid} にも書いておく（Settings なし運用のため）
+  try {
+    const user = auth.currentUser;
+    if (user) {
+      await setDoc(
+        doc(db, 'users', user.uid),
+        { seatNumber: seat },
+        { merge: true }
+      );
+    }
+  } catch {
+    // ここで失敗してもチャット保存は localStorage 経由で動くため継続
+  }
+}
 
 export default function LoginPage() {
   const router = useRouter();
@@ -45,13 +80,8 @@ export default function LoginPage() {
       const email = idToEmail(studentId.trim());
       await signInWithEmailAndPassword(auth, email, password);
 
-      // 席番号をクライアント/サーバーの両方に保存
-      sessionStorage.setItem('seat', seatNormalized);
-      await fetch('/api/session/seat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ seat: seatNormalized }),
-      });
+      // 席番号をクライアント/サーバー/Firestore に保存
+      await saveSeatEverywhere(seatNormalized);
 
       // ✅ ログイン成功でチャットへ
       router.push('/chat');

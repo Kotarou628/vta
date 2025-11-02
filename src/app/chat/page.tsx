@@ -7,6 +7,43 @@ import React, {
 } from 'react'
 import Link from 'next/link'
 
+// Firestore 保存（アンケート回答時）
+import { collection, addDoc, serverTimestamp, doc, getDoc } from 'firebase/firestore'
+import { onAuthStateChanged } from 'firebase/auth'
+import { db, auth } from '@/lib/firebase'
+
+/* ================== 座席番号 正規化・取得を堅牢化 ================== */
+/** 英字1 + 数字2桁に正規化。合わなければ null */
+function normalizeSeatNumber(input: any): string | null {
+  const s = (input ?? '').toString().trim().toUpperCase()
+  return /^[A-Z][0-9]{2}$/.test(s) ? s : null
+}
+function pickSeatNumberFromAny(obj: any): string | null {
+  if (!obj || typeof obj !== 'object') return null
+  const cand = obj.seatNumber ?? obj.seat_no ?? obj.seat ?? obj.number ?? null
+  return normalizeSeatNumber(cand)
+}
+function getSeatNumberFromStorage(): string | null {
+  try {
+    // 素の文字列候補
+    for (const k of ['seatNumber', 'seat', 'seat_no']) {
+      const v = normalizeSeatNumber(localStorage.getItem(k))
+      if (v) return v
+    }
+    // JSON を含みうる候補
+    for (const k of ['userSettings', 'settings', 'profile', 'student', 'userProfile']) {
+      const s = localStorage.getItem(k)
+      if (!s) continue
+      try {
+        const parsed = JSON.parse(s)
+        const picked = pickSeatNumberFromAny(parsed)
+        if (picked) return picked
+      } catch { /* ignore */ }
+    }
+  } catch { /* ignore */ }
+  return null
+}
+
 /* ================== 入力欄ユーティリティ ================== */
 type AutoGrowProps = React.TextareaHTMLAttributes<HTMLTextAreaElement> & { maxVh?: number }
 const AutoGrowTextarea = forwardRef<HTMLTextAreaElement, AutoGrowProps>(function AutoGrowTextarea(
@@ -322,7 +359,7 @@ function extractFromSource(code: string, intent: ExtractIntent): string {
   let m: RegExpExecArray | null
   while ((m = blockRegex.exec(classBody)) !== null) {
     const header = (m[1] || '').trim()
-    const name   = (m[2] || '').trim()   // ← 修正ポイント
+    const name   = (m[2] || '').trim()
     const params = (m[3] || '')
     let i = m.index + m[0].length
     let depth = 1
@@ -416,6 +453,37 @@ export default function ChatPage() {
   const [lastAssistantIndex, setLastAssistantIndex] = useState<number | null>(null)
   const [pendingNudge, setPendingNudge] = useState<string | null>(null)
 
+  // ===== seatNumber のウォッチ・初期取得（Firestore フォールバック） =====
+  const [seatNumber, setSeatNumber] = useState<string | null>(null)
+
+  // localStorage → 変更監視
+  useEffect(() => {
+    setSeatNumber(getSeatNumberFromStorage())
+    const onStorage = () => setSeatNumber(getSeatNumberFromStorage())
+    window.addEventListener('storage', onStorage)
+    return () => window.removeEventListener('storage', onStorage)
+  }, [])
+
+  // Firestore /users/{uid} からのフォールバック読込（初回のみ）
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, async (user) => {
+      if (!user) return
+      try {
+        const ref = doc(db, 'users', user.uid)
+        const snap = await getDoc(ref)
+        const fsSeat = normalizeSeatNumber(snap.exists() ? (snap.data() as any).seatNumber : null)
+        if (fsSeat && !getSeatNumberFromStorage()) {
+          localStorage.setItem('seatNumber', fsSeat) // キャッシュ
+          setSeatNumber(fsSeat)
+        }
+      } catch (e) {
+        // 失敗しても UI は進める
+        console.warn('[seatNumber] fallback fetch failed:', e)
+      }
+    })
+    return () => unsub()
+  }, [])
+
   // 継続時間トラッキング
   const [selectStartedAt, setSelectStartedAt] = useState<number | null>(null)
   const [elapsedSec, setElapsedSec] = useState(0)
@@ -455,7 +523,7 @@ export default function ChatPage() {
     })
   }
 
-  // 折りたたみフォーム
+  // 折りたたみフォーム（UI そのまま）
   const [openHint, setOpenHint] = useState(false)
   const [openError, setOpenError] = useState(false)
 
@@ -694,8 +762,51 @@ ${outputRule(langGuess)}`
     }
   }
 
-  const handleSend = async () => { if (!input.trim() || !problem || waitingFeedback) return; await sendWithContext(input) }
-  const answerFeedback = (_resolved: boolean) => {
+  const handleSend = async () => {
+    if (!input.trim() || !problem || waitingFeedback) return
+    await sendWithContext(input)
+  }
+
+  /* ===== Firestore 保存：アンケート回答時に実行 ===== */
+  const persistChatLog = async (resolved: boolean) => {
+    try {
+      if (!problem) return
+      // localStorage → state の順に取得し、最終正規化
+      const seatRaw = getSeatNumberFromStorage() ?? seatNumber ?? null
+      const seat = normalizeSeatNumber(seatRaw)
+      const user = auth.currentUser
+
+      const msgs = allMessages[problem.id] || []
+      let assistantMessage = ''
+      let userMessage = ''
+      let aIdx = -1
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        if (msgs[i].role === 'assistant') { aIdx = i; assistantMessage = msgs[i].content; break }
+      }
+      if (aIdx !== -1) {
+        for (let j = aIdx - 1; j >= 0; j--) {
+          if (msgs[j].role === 'user') { userMessage = msgs[j].content; break }
+        }
+      }
+
+      await addDoc(collection(db, 'chatLogs'), {
+        userMessage,
+        assistantMessage,
+        resolved,
+        seatNumber: seat ?? null, // ← ここで正規化後の値を書き込む
+        problemTitle: problem.title,
+        problemId: problem.id,
+        userId: user?.uid ?? null,
+        userEmail: user?.email ?? null,
+        createdAt: serverTimestamp(),
+      })
+    } catch (e) {
+      console.error('[Firestore] persistChatLog failed:', e)
+    }
+  }
+
+  const answerFeedback = async (resolved: boolean) => {
+    await persistChatLog(resolved)
     setWaitingFeedback(false)
     setLastAssistantIndex(null)
     if (pendingNudge) {
@@ -755,6 +866,10 @@ ${outputRule(langGuess)}`
           <div className="flex items-center justify-between mb-2">
             <h1 className="text-xl font-bold">{problem?.title || '問題未選択'}</h1>
             <div className="flex items-center gap-3">
+              {/* 追加: 座席番号の小バッジ（表示のみ） */}
+              {seatNumber && (
+                <span className="text-xs px-2 py-1 rounded border bg-white">座席: {seatNumber}</span>
+              )}
               {problem && <span className="text-xs px-2 py-1 rounded border bg-white">⏱ 継続: {fmtHMS(elapsedSec)}</span>}
               <button
                 className={`border px-2 py-1 rounded text-xs ${waitingFeedback ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-50'}`}
@@ -818,7 +933,7 @@ ${outputRule(langGuess)}`
                 </div>
               )
 
-              // 完了後のみアンケート表示
+              // 完了後のみアンケート表示（助手は左／学生は右のまま）
               if (msg.role === 'assistant' && waitingFeedback && (lastAssistantIndex === null || idx >= (lastAssistantIndex ?? 0))) {
                 const { advice, question, codeBlock, rest } = parseAdviceQuestion(msg.content)
                 return (
