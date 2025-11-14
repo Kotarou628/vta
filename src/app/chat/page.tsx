@@ -22,7 +22,7 @@ function normalizeSeatNumber(input: any): string | null {
 }
 function pickSeatNumberFromAny(obj: any): string | null {
   if (!obj || typeof obj !== 'object') return null
-  const cand = obj.seatNumber ?? obj.seat_no ?? obj.seat ?? obj.number ?? null
+  const cand = (obj as any).seatNumber ?? (obj as any).seat_no ?? (obj as any).seat ?? (obj as any).number ?? null
   return normalizeSeatNumber(cand)
 }
 function getSeatNumberFromStorage(): string | null {
@@ -45,8 +45,8 @@ function getSeatNumberFromStorage(): string | null {
 }
 
 /* ================== ポーズ式タイマー（問題ごと） ================== */
-const keyAccum = (id: string) => `selAccum:${id}`         // 累積ミリ秒
-const keyStart = (id: string) => `selStart:${id}`         // 走行開始時刻(ms) ※走行中のみ存在
+const keyAccum = (id: string) => `selAccum:${id}`
+const keyStart = (id: string) => `selStart:${id}`
 
 function readTimer(id: string) {
   const accum = Number(localStorage.getItem(keyAccum(id)) || 0)
@@ -148,16 +148,12 @@ const buildAbstractPrompt = (lang: string, snippet: string) => {
 【ルール】
 1. **型（${shownLang}の型表現）はそのまま残す。**
 2. **識別子（クラス名・変数名・フィールド名・メソッド名）はすべて抽象語に置き換える。**
-   - \`<クラス名>\` / \`<整数型>\` / \`<文字列型>\` / \`<idを表すフィールド>\` / \`<名前を表すフィールド>\` など。
-3. **配列や文字列リテラルなどの具体値も抽象化する。**
-   - 文字列例: \`"math"\` → \`"<科目名1をここに入れる>"\`
-   - 数値例: \`0\` → \`xx\`
-4. **コメントは残すが、具体語は抽象語に置換して説明として分かる文体にする。**
-5. **コンパイルは不要（構造理解が目的）。**
-6. **出力は\`${shownLang}\`のコードブロックのみ**（説明文・前置き・注釈は書かない）。
+3. **具体値も抽象化する（文字列/数値など）。**
+4. **コメントは残しつつ抽象語に置換。**
+5. **コンパイル不要（構造理解が目的）。**
+6. **出力は\`${shownLang}\`のコードブロックのみ。**
 
-【変換対象（最重要）】
-- 下に与える「抽出スニペット」の範囲**だけ**を抽象化する。前後の補完や別の部分の生成はしない。
+【変換対象（最重要）】下のスニペット範囲だけ。
 `.trim()
 
   return String.raw`
@@ -176,35 +172,22 @@ const outputRule = (lang: string) => String.raw`
 コード例は \`\`\`${lang} から。識別子追加や別記法の導入は禁止。
 `.trim()
 
-/** 採点モード（エラー解説は不要、数値で完成度を返す） */
 const GRADING_PROMPT = String.raw`
 [役割] 教員として提出コードを採点し、学習者が自分の進捗を数値で把握できるようにする。
-[比較] 模範コードと学生コードを比較し、満たせている要件/満たせていない要件を抽出。
+[比較] 模範コードと学生コードを比較し、満たせている要件/未達の要件を抽出。
 [出力]
 1) 完成度: XX%（根拠を短く）
-2) 未達/不正確: 要件名または箇所を短く列挙（最大5個）
-3) 次の一手: 次に実装/修正すべき箇所を1〜3点
+2) 未達/不正確: 最大5点
+3) 次の一手: 1〜3点
 [禁止]
-- エラーメッセージの引用・デバッグログの解説は不要。
-- 模範コードの全文貼付は禁止。
+- エラーメッセージの解説
+- 模範コード全文貼付
 `.trim()
 
-/* ===== メッセージ型 ===== */
-type Message = {
-  role: 'user' | 'assistant';
-  content: string;
-  /** 送信時点のUIモード（ユーザー送信のみ付与） */
-  mode?: 'normal' | 'grading';
-}
-
-// ① 型を整理（solution_files 必須）
+/* ===== 型 ===== */
+type Message = { role: 'user' | 'assistant'; content: string; mode?: 'normal' | 'grading' }
 type ProblemFile = { filename: string; code: string; language?: string }
-type Problem = {
-  id: string;
-  title: string;
-  description: string;
-  solution_files: ProblemFile[];
-}
+type Problem = { id: string; title: string; description: string; solution_files: ProblemFile[] }
 
 /* ===== 問題文ハイライト ===== */
 const KW_H = /(重要|ポイント|要件|仕様|条件|制約|注意|入力|出力|手順|実装手順|目的|ヒント|制限|例|例外|評価|採点)/
@@ -252,7 +235,7 @@ function renderHighlightedDescription(desc: string) {
   )
 }
 
-/* ===== メッセージ整形（堅牢版） ===== */
+/* ===== メッセージ整形 ===== */
 function parseAdviceQuestion(raw: string) {
   const src = (raw || '').replace(/\r\n?/g, '\n')
   const codeRegex = /```[\w#+-]*\n([\s\S]*?)```/g
@@ -351,12 +334,7 @@ function detectLang(text: string, problem?: Problem): string {
 }
 
 /* ===== 抽出ユーティリティ ===== */
-type ExtractIntent = {
-  wantClass: boolean
-  wantFields: boolean
-  wantCtor: boolean
-  wantMethods: boolean
-}
+type ExtractIntent = { wantClass: boolean; wantFields: boolean; wantCtor: boolean; wantMethods: boolean }
 function deriveIntent(userContent: string): ExtractIntent {
   const t = (userContent || '').toLowerCase()
   const wantClass   = /クラス宣言|クラス名|class\s+\w+/.test(userContent) || /\bclass\b/.test(t)
@@ -376,7 +354,7 @@ function extractFromSource(code: string, intent: ExtractIntent): string {
   if (!src.trim()) return ''
 
   const classMatch = src.match(/\bclass\s+([A-Za-z_]\w*)\s*\{([\s\S]*)\}\s*$/m)
-  const className = classMatch ? classMatch[1] : null
+  const clsName = classMatch ? classMatch[1] : null
   const classBody = classMatch ? classMatch[2] : src
 
   const lines = classBody.split('\n')
@@ -393,29 +371,31 @@ function extractFromSource(code: string, intent: ExtractIntent): string {
   let m: RegExpExecArray | null
   while ((m = blockRegex.exec(classBody)) !== null) {
     const header = (m[1] || '').trim()
-    const name   = (m[2] || '').trim()
-    const params = (m[3] || '')
-    let i = m.index + m[0].length
-    let depth = 1
-    while (i < classBody.length && depth > 0) {
-      const ch = classBody[i++]
-      if (ch === '{') depth++
-      else if (ch === '}') depth--
+    the: {
+      const name   = (m[2] || '').trim()
+      const params = (m[3] || '')
+      let i = m.index + m[0].length
+      let depth = 1
+      while (i < classBody.length && depth > 0) {
+        const ch = classBody[i++]
+        if (ch === '{') depth++
+        else if (ch === '}') depth--
+      }
+      const block = classBody.slice(m.index, i)
+      blocks.push({ header, name, params, block })
     }
-    const block = classBody.slice(m.index, i)
-    blocks.push({ header, name, params, block })
   }
 
   const ctorBlocks: string[] = []
   const methodBlocks: string[] = []
   for (const b of blocks) {
-    const isCtor = className && b.name === className
+    const isCtor = clsName && b.name === clsName
     if (isCtor) ctorBlocks.push(b.block)
     else        methodBlocks.push(b.block)
   }
 
   const collected: string[] = []
-  if (intent.wantClass && className) collected.push(`class ${className} {}`)
+  if (intent.wantClass && clsName) collected.push(`class ${clsName} {}`)
   if (intent.wantFields && fieldLines.length) collected.push(...fieldLines)
   if (intent.wantCtor && ctorBlocks.length) collected.push(...ctorBlocks)
   if (intent.wantMethods && methodBlocks.length) collected.push(...methodBlocks)
@@ -424,23 +404,15 @@ function extractFromSource(code: string, intent: ExtractIntent): string {
 }
 function extractFromProblem(problem: Problem, intent: ExtractIntent): { snippet: string; lang: string } {
   const sources = (problem.solution_files ?? []).map(f => ({ code: f.code, language: f.language }))
-
   let best = ''
   let bestLang = 'java'
   for (const s of sources) {
     const snip = extractFromSource(s.code, intent)
-    if (snip && snip.length > best.length) {
-      best = snip
-      bestLang = s.language || detectLang(s.code) || 'java'
-    }
+    if (snip && snip.length > best.length) { best = snip; bestLang = s.language || detectLang(s.code) || 'java' }
   }
-
   console.groupCollapsed('[DEBUG] 抽出スニペット/言語 推定')
-  console.log('intent:', intent)
-  console.log('detected language:', bestLang)
-  console.log('snippet:\n', best)
+  console.log('intent:', intent); console.log('detected language:', bestLang); console.log('snippet:\n', best)
   console.groupEnd()
-
   return { snippet: best, lang: bestLang }
 }
 
@@ -461,6 +433,102 @@ function getBestCodeBlock(md: string, preferLang?: string | null): { lang: strin
   return best
 }
 
+/* ================== Chat API ストリーム読取り（SSE/非SSE両対応） ================== */
+async function streamChat(
+  message: string,
+  onDelta?: (delta: string) => void,
+  { idleMs = 30000 }: { idleMs?: number } = {}
+): Promise<string> {
+  const ac = new AbortController();
+  const res = await fetch('/api/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message }),
+    signal: ac.signal,
+  });
+
+  // 非ストリーム（同期）レスポンス
+  if (!res.body) {
+    const text = await res.text().catch(() => '');
+    if (text) onDelta?.(text);
+    return text;
+  }
+
+  const isSSE = (res.headers.get('content-type') || '').includes('text/event-stream');
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder('utf-8');
+
+  let full = '';
+  let lastTick = Date.now();
+  let sseBuffer = '';      // ★ チャンク跨ぎの行崩れ対策
+  let doneBySentinel = false;
+
+  // アイドル監視（サーバが閉じない事故対策）
+  const idleTimer = setInterval(() => {
+    if (Date.now() - lastTick > idleMs) {
+      try { ac.abort(); } catch {}
+    }
+  }, Math.min(5000, Math.max(1000, Math.floor(idleMs / 3))));
+
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      lastTick = Date.now();
+
+      const chunk = decoder.decode(value, { stream: true });
+
+      if (isSSE) {
+        sseBuffer += chunk;
+        const lines = sseBuffer.split('\n');
+        sseBuffer = lines.pop() ?? ''; // 最後の未完行をバッファに残す
+
+        for (const raw of lines) {
+          const line = raw.trim();
+          if (!line) continue;
+
+          // event: done / data: [DONE] のどちらにも対応
+          if (line.toLowerCase() === 'event: done') {
+            doneBySentinel = true;
+            await reader.cancel();
+            break;
+          }
+          if (!line.startsWith('data:')) continue;
+
+          const payload = line.slice(5).trim();
+          if (!payload) continue;
+          if (payload === '[DONE]') {
+            doneBySentinel = true;
+            await reader.cancel();
+            break;
+          }
+
+          // JSON/SSE or 素テキスト両対応
+          let delta = '';
+          try {
+            const j = JSON.parse(payload);
+            delta = j?.choices?.[0]?.delta?.content ?? j?.choices?.[0]?.message?.content ?? '';
+          } catch {
+            delta = payload;
+          }
+          if (delta) {
+            full += delta;
+            onDelta?.(delta);
+          }
+        }
+        if (doneBySentinel) break;
+      } else {
+        full += chunk;
+        onDelta?.(chunk);
+      }
+    }
+  } finally {
+    clearInterval(idleTimer);
+  }
+
+  return full;
+}
+
 /* ================== 画面コンポーネント ================== */
 export default function ChatPage() {
   const [input, setInput] = useState('')
@@ -470,6 +538,11 @@ export default function ChatPage() {
   const [problem, setProblem] = useState<Problem | null>(null)
   const [gradingMode, setGradingMode] = useState(false)
 
+  // 採点モード UI
+  const [gradingInputMode, setGradingInputMode] = useState<'files' | 'paste'>('files')
+  const [gradingPaste, setGradingPaste] = useState('')
+  const pasteTextareaRef = useRef<HTMLTextAreaElement | null>(null)
+
   const bottomRef = useRef<HTMLDivElement | null>(null)
 
   // ===== 解決確認 =====
@@ -477,7 +550,7 @@ export default function ChatPage() {
   const [lastAssistantIndex, setLastAssistantIndex] = useState<number | null>(null)
   const [pendingNudge, setPendingNudge] = useState<string | null>(null)
 
-  // ===== seatNumber のウォッチ・初期取得 =====
+  // ===== seatNumber 初期取得 & ログイン時の全タイマーリセット =====
   const [seatNumber, setSeatNumber] = useState<string | null>(null)
   useEffect(() => {
     setSeatNumber(getSeatNumberFromStorage())
@@ -489,6 +562,13 @@ export default function ChatPage() {
     const unsub = onAuthStateChanged(auth, async (user) => {
       if (!user) return
       try {
+        // すべての問題の継続時間をリセット
+        Object.keys(localStorage).forEach((k) => {
+          if (k.startsWith('selAccum:') || k.startsWith('selStart:')) localStorage.removeItem(k)
+        })
+        setElapsedSec(0)
+
+        // FirestoreのseatNumber → localStorage補完
         const ref = doc(db, 'users', user.uid)
         const snap = await getDoc(ref)
         const fsSeat = normalizeSeatNumber(snap.exists() ? (snap.data() as any).seatNumber : null)
@@ -503,7 +583,7 @@ export default function ChatPage() {
     return () => unsub()
   }, [])
 
-  // ====== ポーズ式タイマー ======
+  // ====== タイマー ======
   const [elapsedSec, setElapsedSec] = useState(0)
   const [nudgeCount, setNudgeCount] = useState(0)
   const pad2 = (n: number) => n.toString().padStart(2, '0')
@@ -585,15 +665,12 @@ export default function ChatPage() {
     })
   }
 
-  // 折りたたみフォーム（将来拡張用）
+  // （保持）ヒント/エラー用の入力状態
   const [openHint, setOpenHint] = useState(false)
   const [openError, setOpenError] = useState(false)
-
-  // 入力フォーム（ヒント/エラー）
   const [hintQuestion, setHintQuestion] = useState('')
   const [hintCode, setHintCode] = useState('')
   const [hintContext, setHintContext] = useState('')
-
   const [errWhere, setErrWhere] = useState('')
   const [errMessage, setErrMessage] = useState('')
   const [errCode, setErrCode] = useState('')
@@ -610,14 +687,10 @@ export default function ChatPage() {
     return userText.length > summaryLimit ? userText.slice(-summaryLimit) : userText
   }
 
-  /** 送信（通常/採点モード問わず自由入力） */
+  /** 送信（通常モードのみ） */
   const sendWithContext = async (userContent: string) => {
     if (!userContent.trim() || !problem) return
-    const userMessage: Message = {
-      role: 'user',
-      content: userContent,
-      mode: gradingMode ? 'grading' : 'normal',
-    }
+    const userMessage: Message = { role: 'user', content: userContent, mode: gradingMode ? 'grading' : 'normal' }
     const current = [...(allMessages[problem.id] || []), userMessage]
     setAllMessages({ ...allMessages, [problem.id]: current })
     setInput('')
@@ -633,8 +706,6 @@ export default function ChatPage() {
       .join('\n\n')
 
     setLoading(true)
-
-    // 途中表示のプレースホルダ
     createStreamingAssistant('生成中…')
     let advicePreview = ''
     let questionPreview = ''
@@ -654,7 +725,6 @@ export default function ChatPage() {
     }
 
     try {
-      // 1) 教員プロンプト（ストリーム）
       const teacherPrompt = `${BASE_TEACHER_PROMPT(langGuess)}
 
 【問題文】
@@ -671,42 +741,19 @@ ${userContent}
 
 ${outputRule(langGuess)}`
 
-      const res1 = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: teacherPrompt }),
-      })
-      if (!res1.body) throw new Error('No response body from API (teacher step)')
-
+      // ===== 教員ステップ
       let teacherRaw = ''
-      {
-        const reader = res1.body.getReader()
-        const decoder = new TextDecoder('utf-8')
-        while (true) {
-          const { value, done } = await reader.read()
-          if (done) break
-          const chunk = decoder.decode(value, { stream: true })
-          const lines = chunk.split('\n')
-            .filter((l) => l.trim().startsWith('data: '))
-            .map((l) => l.replace(/^data: /, ''))
-            .filter((l) => l !== '' && l !== '[DONE]')
-          for (const jsonStr of lines) {
-            try {
-              const parsed = JSON.parse(jsonStr)
-              const delta = parsed.choices?.[0]?.delta?.content || ''
-              if (!delta) continue
-              teacherRaw += delta
-              const a = teacherRaw.match(/(?:^|\n)アドバイス[:：]\s*([^\n]+)/)
-              const q = teacherRaw.match(/(?:^|\n)質問[:：]\s*([^\n?]+[?？]?)/)
-              advicePreview = a ? a[1].trim() : advicePreview
-              questionPreview = q ? q[1].trim() : questionPreview
-              renderNow()
-            } catch { /* ignore */ }
-          }
-        }
-      }
+      await streamChat(teacherPrompt, (delta) => {
+        teacherRaw += delta
+        // プレビュー抽出（逐次）
+        const a = teacherRaw.match(/(?:^|\n)アドバイス[:：]\s*([^\n]+)/)
+        const q = teacherRaw.match(/(?:^|\n)質問[:：]\s*([^\n?]+[?？]?)/)
+        advicePreview = a ? a[1].trim() : advicePreview
+        questionPreview = q ? q[1].trim() : questionPreview
+        renderNow()
+      })
 
-      // 2) 抽出スニペット決定
+      // ===== 抽象化ステップ
       let snippet = ''
       const picked = getBestCodeBlock(teacherRaw, langGuess)
       if (picked && picked.code.trim()) {
@@ -722,52 +769,18 @@ ${outputRule(langGuess)}`
       if (!questionPreview) questionPreview = 'どのフィールドをどの初期値で宣言しますか？'
       renderNow()
 
-      // 3) 抽象化（ストリーム）
       const abstractPrompt = buildAbstractPrompt(codeLang, snippet)
-      const res2 = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: abstractPrompt }),
+      let insideFence = false
+      await streamChat(abstractPrompt, (delta) => {
+        const open = delta.match(/```([\w#+-]*)\s*$/)
+        const close = delta.match(/```/)
+        if (open && !insideFence) { if (open[1]) codeLang = open[1]; insideFence = true; return }
+        if (insideFence && close) { insideFence = false; return }
+        if (insideFence || delta.trim()) { abstractBuffer += delta }
+        const now = performance.now()
+        if (now - lastFlush > 200) { lastFlush = now; renderNow() }
       })
-      if (!res2.body) throw new Error('No response body from API (abstract step)')
 
-      {
-        const reader = res2.body.getReader()
-        const decoder = new TextDecoder('utf-8')
-        let insideFence = false
-        while (true) {
-          const { value, done } = await reader.read()
-          if (done) break
-          const chunk = decoder.decode(value, { stream: true })
-          const lines = chunk.split('\n')
-            .filter((l) => l.trim().startsWith('data: '))
-            .map((l) => l.replace(/^data: /, ''))
-            .filter((l) => l !== '' && l !== '[DONE]')
-          for (const jsonStr of lines) {
-            try {
-              const parsed = JSON.parse(jsonStr)
-              const delta = parsed.choices?.[0]?.delta?.content || ''
-              if (!delta) continue
-
-              const open = delta.match(/```([\w#+-]*)\s*$/)
-              const close = delta.match(/```/)
-              if (open && !insideFence) {
-                if (open[1]) codeLang = open[1]
-                insideFence = true
-              } else if (insideFence && close) {
-                insideFence = false
-              } else if (insideFence || delta.trim()) {
-                abstractBuffer += delta
-              }
-
-              const now = performance.now()
-              if (now - lastFlush > 200) { lastFlush = now; renderNow() }
-            } catch { /* ignore */ }
-          }
-        }
-      }
-
-      // 4) 完了後にのみアンケート有効化
       renderNow()
       setLastAssistantIndex((allMessages[problem.id]?.length ?? 0) + 1)
       setWaitingFeedback(true)
@@ -782,62 +795,38 @@ ${outputRule(langGuess)}`
   }
 
   const handleSend = async () => {
-    if (!input.trim() || !problem || waitingFeedback) return
+    // ★ loading 中もブロック
+    if (!input.trim() || !problem || waitingFeedback || loading) return
     await sendWithContext(input)
   }
 
-  /* ===== Firestore 保存：アンケート回答時に実行（通常モードの会話ログ） ===== */
+  /* ===== Firestore 保存（通常モードの会話ログ） ===== */
   const persistChatLog = async (resolved: boolean) => {
     try {
       if (!problem) return
-
-      // 座席・ユーザ
       const seatRaw = getSeatNumberFromStorage() ?? seatNumber ?? null
       const seat = normalizeSeatNumber(seatRaw)
       const user = auth.currentUser
 
-      // 直近の user / assistant
       const msgs = allMessages[problem.id] || []
       let assistantMessage = ''
       let userMessage = ''
       let userMode: 'normal' | 'grading' | null = null
       let aIdx = -1
-      for (let i = msgs.length - 1; i >= 0; i--) {
-        if (msgs[i].role === 'assistant') { aIdx = i; assistantMessage = msgs[i].content; break }
-      }
-      if (aIdx !== -1) {
-        for (let j = aIdx - 1; j >= 0; j--) {
-          const m = msgs[j]
-          if (m.role === 'user') {
-            userMessage = m.content
-            userMode = m.mode ?? null
-            break
-          }
-        }
-      }
+      for (let i = msgs.length - 1; i >= 0; i--) if (msgs[i].role === 'assistant') { aIdx = i; assistantMessage = msgs[i].content; break }
+      if (aIdx !== -1) for (let j = aIdx - 1; j >= 0; j--) { const m = msgs[j]; if (m.role === 'user') { userMessage = m.content; userMode = m.mode ?? null; break } }
       if (!userMode) userMode = gradingMode ? 'grading' : 'normal'
 
-      // 経過秒（タイマー）
       const { accum, runningAt } = readTimer(problem.id)
       const ms = accum + (runningAt ? (Date.now() - runningAt) : 0)
       const durationSec = Math.max(0, Math.floor(ms / 1000))
 
       await addDoc(collection(db, 'chatLogs'), {
-        userMessage,
-        assistantMessage,
-        resolved,
-        seatNumber: seat ?? null,
-        problemTitle: problem.title,
-        problemId: problem.id,
-        userId: user?.uid ?? null,
-        userEmail: user?.email ?? null,
-
-        createdAt: serverTimestamp(),
-        answeredAt: serverTimestamp(),
-        durationSec,
-
-        userMode,                                   // 送信時のモード
-        answerMode: gradingMode ? 'grading' : 'normal', // アンケ回答時のモード
+        userMessage, assistantMessage, resolved,
+        seatNumber: seat ?? null, problemTitle: problem.title, problemId: problem.id,
+        userId: user?.uid ?? null, userEmail: user?.email ?? null,
+        createdAt: serverTimestamp(), answeredAt: serverTimestamp(), durationSec,
+        userMode, answerMode: gradingMode ? 'grading' : 'normal',
       })
     } catch (e) {
       console.error('[Firestore] persistChatLog failed:', e)
@@ -848,11 +837,7 @@ ${outputRule(langGuess)}`
     await persistChatLog(resolved)
     setWaitingFeedback(false)
     setLastAssistantIndex(null)
-    if (pendingNudge) {
-      const text = pendingNudge
-      setPendingNudge(null)
-      setTimeout(() => pushAssistant(text), 10)
-    }
+    if (pendingNudge) { const text = pendingNudge; setPendingNudge(null); setTimeout(() => pushAssistant(text), 10) }
   }
 
   const formatMessageContent = (content: string): (string | { code: string })[] => {
@@ -866,13 +851,12 @@ ${outputRule(langGuess)}`
     return parts
   }
 
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages, waitingFeedback])
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages, waitingFeedback])
 
   /* ================== 採点モード：ファイル提出 & 保存 ================== */
   const [uploads, setUploads] = useState<{ name: string; size: number; text: string }[]>([])
   const [gradingSaving, setGradingSaving] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
 
   function handlePickFiles(files: FileList | null) {
     if (!files) return
@@ -882,16 +866,49 @@ ${outputRule(langGuess)}`
       const text = await f.text()
       return { name: f.name, size: f.size, text }
     })
-    Promise.all(readers).then(list => setUploads(list.filter(Boolean) as any))
+    Promise.all(readers).then(list => {
+      const add = (list.filter(Boolean) as any[])
+      setUploads(prev => [...prev, ...add])
+    })
+  }
+  function removeUpload(idx: number) { setUploads(prev => prev.filter((_, i) => i !== idx)) }
+  function handleDropOnFileZone(e: React.DragEvent<HTMLDivElement>) {
+    e.preventDefault()
+    if (e.dataTransfer?.files?.length) handlePickFiles(e.dataTransfer.files)
+  }
+
+  // ★ Storage URL 取得の安全化（過待ち防止）
+  async function safeGetDownloadURL(r: ReturnType<typeof sRef>, timeoutMs = 8000): Promise<string> {
+    return await Promise.race<string>([
+      getDownloadURL(r),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('getDownloadURL timeout')), timeoutMs)) as any
+    ]);
+  }
+
+  // ★ アップロード自体にもタイムアウト＆計測を付与
+  async function safeUploadString(r: ReturnType<typeof sRef>, content: string, timeoutMs = 15000) {
+    console.time(`[UPLOAD] ${r.fullPath}`);
+    const res = await Promise.race([
+      // ここで contentType を明示（テキスト）
+      uploadString(r, content, 'raw', { contentType: 'text/plain; charset=utf-8' }),
+      new Promise<never>((_, rej) => setTimeout(() => rej(new Error('uploadString timeout')), timeoutMs)),
+    ]);
+    console.timeEnd(`[UPLOAD] ${r.fullPath}`);
+    return res;
   }
 
   async function handleGradingSubmit() {
-    if (!problem || uploads.length === 0) return
-    setLoading(true)
-    setGradingSaving(true)
+    if (!problem) return
+    if (gradingInputMode === 'files' && uploads.length === 0) return
+    if (gradingInputMode === 'paste' && !gradingPaste.trim()) return
 
-    // 1) 採点のためのプロンプト（エラー解説不要）
-    const filesForPrompt = uploads.map(u => `// ${u.name}\n\`\`\`\n${u.text}\n\`\`\``).join('\n\n')
+    setLoading(true); setGradingSaving(true)
+
+    const filesForPrompt =
+      gradingInputMode === 'paste'
+        ? `// pasted_all.txt\n\`\`\`\n${gradingPaste}\n\`\`\``
+        : uploads.map(u => `// ${u.name}\n\`\`\`\n${u.text}\n\`\`\``).join('\n\n')
+
     const exemplarForPrompt = (problem.solution_files||[])
       .map(f => `// ${f.filename}\n\`\`\`\n${f.code}\n\`\`\``).join('\n\n') || '(なし)'
 
@@ -907,84 +924,107 @@ ${exemplarForPrompt}
 ${filesForPrompt}
 `
 
-    // 2) 採点のストリーム表示
-    createStreamingAssistant('採点中…')
+    // ★ 「採点中…」は表示しない（空文字で開始）
+    createStreamingAssistant('')
     let gradingText = ''
     try {
-      const res = await fetch('/api/chat', {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ message: prompt }),
+      gradingText = await streamChat(prompt, (delta) => {
+        updateLastAssistant((prev) => (prev || '') + delta)
       })
-      if (!res.body) throw new Error('No stream')
-      const reader = res.body.getReader()
-      const decoder = new TextDecoder()
-      while (true) {
-        const { value, done } = await reader.read(); if (done) break
-        const chunk = decoder.decode(value)
-        const lines = chunk.split('\n').filter(l => l.trim().startsWith('data: ')).map(l=>l.slice(6)).filter(l=>l && l!=='[DONE]')
-        for (const s of lines) {
-          try {
-            const j = JSON.parse(s)
-            const delta = j.choices?.[0]?.delta?.content || ''
-            if (!delta) continue
-            gradingText += delta
-            updateLastAssistant(gradingText)
-          } catch {}
-        }
-      }
     } catch (e) {
       console.error('grading failed', e)
       updateLastAssistant('採点中にエラーが発生しました。もう一度お試しください。')
     }
 
-    // 3) 採点結果の保存（AI返信が出終わった後）
+    let saveOk = false
     try {
-      await saveGradingSubmission(gradingText)
+      saveOk = await saveGradingSubmission(gradingText)
     } finally {
       setLoading(false)
       setGradingSaving(false)
+
+      // ★ 保存成功時に添付ファイルと貼り付け内容をリセット
+      if (saveOk) {
+        setUploads([])
+        setGradingPaste('')
+      }
     }
   }
 
-  async function saveGradingSubmission(gradingResult: string) {
-    if (!problem) return
+  async function saveGradingSubmission(gradingResult: string): Promise<boolean> {
+    if (!problem) return false
 
-    // 経過秒
+    console.group('[SAVE] grading submission')
     const { accum, runningAt } = readTimer(problem.id)
     const ms = accum + (runningAt ? (Date.now() - runningAt) : 0)
     const durationSec = Math.max(0, Math.floor(ms / 1000))
 
-    // Storage に原本を保存（テキスト）
-    const storage = getStorage()
+    const storage = getStorage(undefined, 'gs://virtualta-916ce-9c6cd.firebasestorage.app')
+
     const uid = auth.currentUser?.uid ?? 'anon'
     const base = `gradingSubmissions/${problem.id}/${uid}/${Date.now()}`
+    const startTs = Date.now()
 
-    const uploaded = await Promise.all(
-      uploads.map(async (u) => {
-        const r = sRef(storage, `${base}/${u.name}`)
-        await uploadString(r, u.text, 'raw')
-        const url = await getDownloadURL(r)
-        return { name: u.name, size: u.size, storagePath: r.fullPath, downloadURL: url }
+    // 監視：全体 25 秒で強制警告（UIは finally で必ず戻る）
+    const watchdog = setTimeout(() => {
+      console.error('[SAVE] watchdog fired (took >25s)')
+    }, 25000)
+
+    try {
+      console.time('[SAVE] uploads')
+      let uploaded: { name: string; size: number; storagePath: string; downloadURL: string }[] = []
+
+      if (gradingInputMode === 'paste') {
+        const name = 'pasted_all.txt'
+        const content = gradingPaste
+        const r = sRef(storage, `${base}/${name}`)
+        await safeUploadString(r, content)               // ★ timeout 付き
+        const url = await safeGetDownloadURL(r)          // ★ timeout 付き
+        uploaded = [{ name, size: content.length, storagePath: r.fullPath, downloadURL: url }]
+      } else if (uploads.length > 0) {
+        uploaded = await Promise.all(
+          uploads.map(async (u) => {
+            const r = sRef(storage, `${base}/${u.name}`)
+            await safeUploadString(r, u.text)            // ★ timeout 付き
+            const url = await safeGetDownloadURL(r)      // ★ timeout 付き
+            return { name: u.name, size: u.size, storagePath: r.fullPath, downloadURL: url }
+          })
+        )
+      } else {
+        console.warn('[SAVE] no files provided; result-only save')
+      }
+      console.timeEnd('[SAVE] uploads')
+
+      console.time('[SAVE] addDoc')
+      await addDoc(collection(db, 'submissions'), {
+        mode: 'grading',
+        problemId: problem.id,
+        problemTitle: problem.title,
+        userId: uid,
+        userEmail: auth.currentUser?.email ?? null,
+        seatNumber: normalizeSeatNumber(getSeatNumberFromStorage() ?? seatNumber ?? null),
+        submittedAt: serverTimestamp(),
+        durationSec,
+        files: uploaded,                 // 空配列の可能性も許容
+        gradingResult,
+        inputMode: gradingInputMode,
+        clientMeta: {
+          ua: navigator.userAgent,
+          tookMs: Date.now() - startTs,
+        },
       })
-    )
-
-    // Firestore にメタ＋採点結果（必要なら本文も同時保存可）
-    await addDoc(collection(db, 'submissions'), {
-      mode: 'grading',
-      problemId: problem.id,
-      problemTitle: problem.title,
-      userId: uid,
-      userEmail: auth.currentUser?.email ?? null,
-      seatNumber: normalizeSeatNumber(getSeatNumberFromStorage() ?? seatNumber ?? null),
-      submittedAt: serverTimestamp(),
-      durationSec,
-
-      files: uploaded,
-      // filesText: uploads.map(u => ({ name: u.name, text: u.text })), // ← 小課題なら有効化してもOK（サイズ注意）
-
-      gradingResult, // 完成度%/未達/次の一手 など
-    })
+      console.timeEnd('[SAVE] addDoc')
+      console.log('[SAVE] done')
+      return true
+    } catch (e) {
+      console.error('[SAVE] failed:', e)
+      // 失敗時も利用者にフィードバック（会話に1行出す）
+      pushAssistant('保存でエラーが発生しました。ネットワーク/ログイン状態/Storage ルールをご確認ください。もう一度お試しください。')
+      return false
+    } finally {
+      clearTimeout(watchdog)
+      console.groupEnd()
+    }
   }
 
   /* ============ 画面描画 ============ */
@@ -1022,17 +1062,11 @@ ${filesForPrompt}
           <div className="flex items-center justify-between mb-2">
             <h1 className="text-xl font-bold">{problem?.title || '問題未選択'}</h1>
             <div className="flex items-center gap-3">
-              {seatNumber && (
-                <span className="text-xs px-2 py-1 rounded border bg-white">座席: {seatNumber}</span>
-              )}
+              {seatNumber && <span className="text-xs px-2 py-1 rounded border bg-white">座席: {seatNumber}</span>}
               {problem && <span className="text-xs px-2 py-1 rounded border bg-white">⏱ 継続: {fmtHMS(elapsedSec)}</span>}
               <button
                 className={`border px-2 py-1 rounded text-xs ${waitingFeedback ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-50'}`}
-                onClick={() => {
-                  if (!problem || waitingFeedback) return
-                  pauseTimer(problem.id)
-                  resumeTimer(problem.id)
-                }}
+                onClick={() => { if (!problem || waitingFeedback) return; pauseTimer(problem.id); resumeTimer(problem.id) }}
                 disabled={waitingFeedback}
               >
                 タイマー再開
@@ -1086,7 +1120,6 @@ ${filesForPrompt}
                 </div>
               )
 
-              // 完了後のみアンケート表示
               if (msg.role === 'assistant' && waitingFeedback && (lastAssistantIndex === null || idx >= (lastAssistantIndex ?? 0))) {
                 const { advice, question, codeBlock, rest } = parseAdviceQuestion(msg.content)
                 return (
@@ -1094,7 +1127,7 @@ ${filesForPrompt}
                     <div className="flex justify-start">
                       <div className="p-3 rounded max-w-[75%] bg-green-50 whitespace-pre-wrap break-words space-y-2">
                         {advice && <p className="leading-relaxed">{emphasizeInline(advice)}</p>}
-                        {question && <p className="leading-relらxed font-semibold">{emphasizeInline(question)}</p>}
+                        {question && <p className="leading-relaxed font-semibold">{emphasizeInline(question)}</p>}
                         {codeBlock && (
                           <div>
                             {formatMessageContent(codeBlock).map((part, i) =>
@@ -1126,91 +1159,181 @@ ${filesForPrompt}
             <div ref={bottomRef} />
           </div>
 
-          {/* 採点モード：ファイル提出UI（通常入力とは独立） */}
+          {/* ===== 採点モードUI（ファイル or 貼り付け） ===== */}
           {problem && !waitingFeedback && gradingMode && (
-            <div className="mb-3 border rounded p-3 bg-slate-50">
-              <div className="text-sm font-semibold mb-2">採点モード提出</div>
-              <p className="text-xs mb-2 text-gray-700">
-                .java / .c / .cpp / .py / .cs / .kt / .js / .ts / .tsx のファイルを提出してください。AIの採点結果が表示された後、自動で保存されます。
-              </p>
-              <input
-                type="file"
-                multiple
-                accept=".java,.c,.cpp,.py,.cs,.kt,.js,.ts,.tsx"
-                onChange={(e) => handlePickFiles(e.target.files)}
-                className="text-sm"
-              />
-              {uploads.length > 0 && (
-                <ul className="mt-2 text-xs list-disc pl-5">
-                  {uploads.map(u => <li key={u.name}>{u.name}（{u.size}B）</li>)}
-                </ul>
+            <div className="mb-3 border rounded p-3 bg-slate-50 space-y-3">
+              <div className="text-sm font-semibold">採点モード提出（どちらか選択）</div>
+
+              <div className="flex items-center gap-6 text-sm">
+                <label className="flex items-center gap-2">
+                  <input
+                    type="radio"
+                    name="grading-input-mode"
+                    value="files"
+                    checked={gradingInputMode === 'files'}
+                    onChange={() => setGradingInputMode('files')}
+                  />
+                  ファイル提出（複数可）
+                </label>
+                <label className="flex items-center gap-2">
+                  <input
+                    type="radio"
+                    name="grading-input-mode"
+                    value="paste"
+                    checked={gradingInputMode === 'paste'}
+                    onChange={() => { setGradingInputMode('paste'); setTimeout(()=>pasteTextareaRef.current?.focus(),0) }}
+                  />
+                  コード全文を貼り付ける
+                </label>
+              </div>
+
+              {/* === ファイル提出（ドロップ可能範囲を水色で強調） === */}
+              {gradingInputMode === 'files' && (
+                <div
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={handleDropOnFileZone}
+                  className="rounded-2xl border-2 border-dashed border-sky-300 bg-sky-50/70 hover:bg-sky-50 transition-colors p-4 space-y-3"
+                >
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs text-gray-700">
+                      .java / .c / .cpp / .py / .cs / .kt / .js / .ts / .tsx をこのエリアに<strong>ドラッグ&ドロップ</strong>できます。<br/>
+                      下の「ファイルを選ぶ」からも追加可能。提出前は一覧から<strong>削除</strong>・<strong>追加</strong>ができます。
+                    </p>
+                    <label
+                      className="cursor-pointer text-xs bg-sky-600 text-white px-3 py-1.5 rounded hover:opacity-90 shadow"
+                      title="ファイル選択"
+                    >
+                      ファイルを選ぶ
+                      <input
+                        ref={fileInputRef}
+                        type="file"
+                        multiple
+                        accept=".java,.c,.cpp,.py,.cs,.kt,.js,.ts,.tsx"
+                        onChange={(e) => { handlePickFiles(e.target.files); if (e.currentTarget) e.currentTarget.value = '' }}
+                        className="hidden"
+                      />
+                    </label>
+                  </div>
+
+                  {uploads.length === 0 ? (
+                    <div className="text-xs text-gray-500">ファイルの選択がまだありません。</div>
+                  ) : (
+                    <ul className="mt-1 text-xs divide-y rounded border bg-white">
+                      {uploads.map((u, i) => (
+                        <li key={`${u.name}-${i}`} className="flex items-center justify-between px-3 py-2">
+                          <span className="truncate">{u.name}（{u.size}B）</span>
+                          <button
+                            className="text-rose-700 border border-rose-300 px-2 py-0.5 rounded hover:bg-rose-50"
+                            onClick={() => removeUpload(i)}
+                          >
+                            削除
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
               )}
-              <div className="mt-3">
+
+              {/* === 貼り付け（既存の大きい貼り付け箱） === */}
+              {gradingInputMode === 'paste' && (
+                <div className="space-y-2">
+                  <div className="border-2 border-dashed rounded-2xl p-4 bg-white/70 hover:bg-white transition-colors">
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="text-sm font-semibold">ここに<strong>コード全文</strong>を貼り付け（Ctrl+V / ⌘V）</div>
+                      <button
+                        type="button"
+                        className="text-xs border px-3 py-1 rounded hover:bg-gray-50"
+                        onClick={() => pasteTextareaRef.current?.focus()}
+                      >
+                        クリップボードから貼り付け
+                      </button>
+                    </div>
+                    <div className="mb-2 text-[12px] text-gray-600">
+                      テキストやコードのファイルをドラッグ&ドロップしても読み込めます。
+                    </div>
+                    <AutoGrowTextarea
+                      ref={pasteTextareaRef as any}
+                      value={gradingPaste}
+                      onChange={(e) => setGradingPaste(e.target.value)}
+                      placeholder={`例）
+                      /* あなたのプロジェクト全コード */
+                      class Main { public static void main(String[] args) { /* ... */ } }
+                      // 複数ファイルはそのまま連結でOK
+                      `}
+                      maxVh={50}
+                      className="min-h-[16rem] rounded-xl"
+                    />
+                    <div className="mt-1 text-xs text-gray-600">
+                      {gradingPaste.split('\n').length} 行 / {gradingPaste.length} 文字
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <div className="pt-2">
                 <button
                   className="bg-emerald-600 text-white px-4 py-2 rounded disabled:opacity-50"
                   onClick={handleGradingSubmit}
-                  disabled={uploads.length === 0 || loading || gradingSaving || waitingFeedback || !problem}
+                  disabled={
+                    loading || gradingSaving || waitingFeedback || !problem ||
+                    (gradingInputMode === 'files' && uploads.length === 0) ||
+                    (gradingInputMode === 'paste' && !gradingPaste.trim())
+                  }
                 >
                   {gradingSaving ? '採点&保存中…' : '採点として提出'}
                 </button>
               </div>
+
+              <div className="text-[11px] text-gray-500">
+                ※ 採点モードでは質問の受付は行いません（採点のみ）。ファイル提出と貼り付けの切り替えは提出前ならいつでも可能です。
+              </div>
             </div>
           )}
 
-          {/* 入力誘導（採点モードの自由入力ガイダンス） */}
-          {problem && !waitingFeedback && gradingMode && (
-            <div className="mb-2 rounded border border-indigo-200 bg-indigo-50 text-indigo-900 text-sm p-3 leading-6">
-              <p className="font-semibold mb-1">採点モードです：提出ファイルに加えて、必要なら現在のコード<strong>全体</strong>を貼り付けてもOKです（任意）。</p>
-              <ul className="list-disc pl-5 space-y-1">
-                <li>複数ファイルは順に提出してください</li>
-                <li>この自由入力は任意（質問や補足がある場合に使用）</li>
-              </ul>
-            </div>
-          )}
-
-          {/* 自由入力（通常Q&A） */}
-          <div className="mt-4">
-            <AutoGrowTextarea
-              value={input}
-              placeholder={
-                !problem
-                  ? 'まず問題を選んでください'
-                  : waitingFeedback
-                    ? '（まず「解決できましたか？」に回答してください）'
-                    : gradingMode
-                      ? '【採点モード】（任意）質問や補足があれば入力してください'
+          {/* 通常モードの自由入力（採点モードでは非表示） */}
+          {!gradingMode && (
+            <div className="mt-4">
+              <AutoGrowTextarea
+                value={input}
+                placeholder={
+                  !problem
+                    ? 'まず問題を選んでください'
+                    : waitingFeedback
+                      ? '（まず「解決できましたか？」に回答してください）'
                       : '自由入力（Enterで送信、Shift+Enterで改行 / Tabでインデント）'
-              }
-              className={gradingMode ? 'min-h-[12rem]' : undefined}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (waitingFeedback) return
-                if (e.key === 'Tab') {
-                  e.preventDefault()
-                  const el = e.currentTarget
-                  const start = el.selectionStart ?? 0
-                  const end = el.selectionEnd ?? 0
-                  const indent = '  '
-                  const next = input.slice(0, start) + indent + input.slice(end)
-                  setInput(next)
-                  requestAnimationFrame(() => { (el as any).selectionStart = (el as any).selectionEnd = start + indent.length })
                 }
-                if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend() }
-              }}
-              maxVh={70}
-              disabled={waitingFeedback || !problem}
-            />
-            <div className="mt-1 flex items-center justify-between text-xs text-gray-600">
-              <div>{input.split('\n').length} 行 / {input.length} 文字</div>
-              <button
-                className="bg-blue-600 text-white px-4 py-2 rounded disabled:opacity-50"
-                onClick={handleSend}
-                disabled={sendDisabled || !input.trim()}
-              >
-                {loading ? '送信中...' : gradingMode ? '（任意）採点モードで送信' : '自由入力で送信'}
-              </button>
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  // ★ waitingFeedback or loading 中はキーハンドリングしない
+                  if (waitingFeedback || loading) return
+                  if (e.key === 'Tab') {
+                    e.preventDefault()
+                    const el = e.currentTarget
+                    const start = el.selectionStart ?? 0
+                    const end = el.selectionEnd ?? 0
+                    const indent = '  '
+                    const next = input.slice(0, start) + indent + input.slice(end)
+                    setInput(next)
+                    requestAnimationFrame(() => { (el as any).selectionStart = (el as any).selectionEnd = start + indent.length })
+                  }
+                  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend() }
+                }}
+                maxVh={70}
+                disabled={waitingFeedback || !problem}
+              />
+              <div className="mt-1 flex items-center justify-between text-xs text-gray-600">
+                <div>{input.split('\n').length} 行 / {input.length} 文字</div>
+                <button
+                  className="bg-blue-600 text-white px-4 py-2 rounded disabled:opacity-50"
+                  onClick={handleSend}
+                  disabled={sendDisabled || !input.trim()}
+                >
+                  {loading ? '送信中...' : '自由入力で送信'}
+                </button>
+              </div>
             </div>
-          </div>
+          )}
         </div>
       </main>
     </>
