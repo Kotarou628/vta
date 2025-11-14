@@ -5,7 +5,6 @@ import React, {
   useEffect, useMemo, useRef, useState, ReactNode,
   forwardRef, useImperativeHandle,
 } from 'react'
-import Link from 'next/link'
 
 // Firestore / Auth
 import { collection, addDoc, serverTimestamp, doc, getDoc } from 'firebase/firestore'
@@ -183,6 +182,70 @@ const GRADING_PROMPT = String.raw`
 - エラーメッセージの解説
 - 模範コード全文貼付
 `.trim()
+
+const TEMPLATE_ERROR = `【エラー・例外の相談】
+
+※正確に判断するには、できるだけ詳しい情報が必要です…。  
+ 私も完璧ではないので、いただいた情報が多いほど  
+ より正確に原因を特定できると思います。
+
+１：エラーメッセージ全文（コピペでOK）
+→
+
+２：実行したコード（全部）
+→
+
+３：どのタイミング・操作でエラーが出たか
+→
+
+４：本当はどう動いてほしかったか
+→
+`;
+
+const TEMPLATE_SYNTAX = `【文法・書き方の相談】
+
+※あなたの理解度に合わせて説明したいので…  
+ どこまで理解していて、どこが不安なのか  
+ 少しだけ教えていただけると助かります。
+
+１：使いたいものの名前（メソッド / 変数）
+   例：nextInt、length、parseInt など
+→
+
+２：どう動かしたいか（目的）
+   例：文字列の長さを整数で取りたい、ランダムに選びたいなど
+→
+
+３：今どこまで理解できていて、どこが分からないか
+   例：length と length() の違いが分からない
+→
+`;
+
+const TEMPLATE_REVIEW = `【コードレビュー・バグの相談】
+
+※的確な指摘をするには、期待する動きと  
+ 実際の動きを比べる必要があります。  
+
+１：コード全体
+→
+
+２：期待していた出力・動作
+→
+
+３：実際に起こっている出力・動作
+→
+`;
+
+const TEMPLATE_ALGO = `【理論・アルゴリズムの相談】
+
+※あなたの理解度に合わせて説明したいので…  
+ どの部分が難しかったか、少しだけ教えてください。
+
+１：理解できていないポイント  
+（例：式の意味／処理の流れ／概念そのもの など）
+→
+`;
+
 
 /* ===== 型 ===== */
 type Message = { role: 'user' | 'assistant'; content: string; mode?: 'normal' | 'grading' }
@@ -538,6 +601,18 @@ export default function ChatPage() {
   const [problem, setProblem] = useState<Problem | null>(null)
   const [gradingMode, setGradingMode] = useState(false)
 
+  // ★ 質問モード（最初は none でテキスト欄を出さない）
+  const [questionMode, setQuestionMode] = useState<
+    'none' | 'error' | 'syntax' | 'review' | 'algo' | 'free'
+  >('none')
+
+  const insertTemplate = (tpl: string) => {
+    setInput((prev) => {
+      if (!prev.trim()) return tpl
+      return prev.replace(/\s*$/, '') + '\n\n' + tpl
+    })
+  }
+
   // 採点モード UI
   const [gradingInputMode, setGradingInputMode] = useState<'files' | 'paste'>('files')
   const [gradingPaste, setGradingPaste] = useState('')
@@ -608,6 +683,20 @@ export default function ChatPage() {
     setPendingNudge(null)
   }
 
+  // 問題が変わったら入力状態をリセット
+  useEffect(() => {
+    setInput('')
+    setQuestionMode('none')
+  }, [problem])
+
+  // 採点モードに切り替えたときもリセット
+  useEffect(() => {
+    if (gradingMode) {
+      setInput('')
+      setQuestionMode('none')
+    }
+  }, [gradingMode])
+
   // 経過秒 & ナッジ
   const NUDGE_FIRST = 20 * 60
   const NUDGE_SECOND = 30 * 60
@@ -665,7 +754,7 @@ export default function ChatPage() {
     })
   }
 
-  // （保持）ヒント/エラー用の入力状態
+  // （保持）ヒント/エラー用の入力状態（今は使っていないが削除しない）
   const [openHint, setOpenHint] = useState(false)
   const [openError, setOpenError] = useState(false)
   const [hintQuestion, setHintQuestion] = useState('')
@@ -889,7 +978,6 @@ ${outputRule(langGuess)}`
   async function safeUploadString(r: ReturnType<typeof sRef>, content: string, timeoutMs = 15000) {
     console.time(`[UPLOAD] ${r.fullPath}`);
     const res = await Promise.race([
-      // ここで contentType を明示（テキスト）
       uploadString(r, content, 'raw', { contentType: 'text/plain; charset=utf-8' }),
       new Promise<never>((_, rej) => setTimeout(() => rej(new Error('uploadString timeout')), timeoutMs)),
     ]);
@@ -978,15 +1066,15 @@ ${filesForPrompt}
         const name = 'pasted_all.txt'
         const content = gradingPaste
         const r = sRef(storage, `${base}/${name}`)
-        await safeUploadString(r, content)               // ★ timeout 付き
-        const url = await safeGetDownloadURL(r)          // ★ timeout 付き
+        await safeUploadString(r, content)
+        const url = await safeGetDownloadURL(r)
         uploaded = [{ name, size: content.length, storagePath: r.fullPath, downloadURL: url }]
       } else if (uploads.length > 0) {
         uploaded = await Promise.all(
           uploads.map(async (u) => {
             const r = sRef(storage, `${base}/${u.name}`)
-            await safeUploadString(r, u.text)            // ★ timeout 付き
-            const url = await safeGetDownloadURL(r)      // ★ timeout 付き
+            await safeUploadString(r, u.text)
+            const url = await safeGetDownloadURL(r)
             return { name: u.name, size: u.size, storagePath: r.fullPath, downloadURL: url }
           })
         )
@@ -1005,7 +1093,7 @@ ${filesForPrompt}
         seatNumber: normalizeSeatNumber(getSeatNumberFromStorage() ?? seatNumber ?? null),
         submittedAt: serverTimestamp(),
         durationSec,
-        files: uploaded,                 // 空配列の可能性も許容
+        files: uploaded,
         gradingResult,
         inputMode: gradingInputMode,
         clientMeta: {
@@ -1018,7 +1106,6 @@ ${filesForPrompt}
       return true
     } catch (e) {
       console.error('[SAVE] failed:', e)
-      // 失敗時も利用者にフィードバック（会話に1行出す）
       pushAssistant('保存でエラーが発生しました。ネットワーク/ログイン状態/Storage ルールをご確認ください。もう一度お試しください。')
       return false
     } finally {
@@ -1071,7 +1158,6 @@ ${filesForPrompt}
               >
                 タイマー再開
               </button>
-              <Link href="/settings" className="border px-3 py-1 rounded text-sm hover:bg-gray-50">ユーザ情報を変更</Link>
             </div>
           </div>
 
@@ -1187,7 +1273,7 @@ ${filesForPrompt}
                 </label>
               </div>
 
-              {/* === ファイル提出（ドロップ可能範囲を水色で強調） === */}
+              {/* === ファイル提出 === */}
               {gradingInputMode === 'files' && (
                 <div
                   onDragOver={(e) => e.preventDefault()}
@@ -1235,7 +1321,7 @@ ${filesForPrompt}
                 </div>
               )}
 
-              {/* === 貼り付け（既存の大きい貼り付け箱） === */}
+              {/* === 貼り付け === */}
               {gradingInputMode === 'paste' && (
                 <div className="space-y-2">
                   <div className="border-2 border-dashed rounded-2xl p-4 bg-white/70 hover:bg-white transition-colors">
@@ -1293,45 +1379,129 @@ ${filesForPrompt}
 
           {/* 通常モードの自由入力（採点モードでは非表示） */}
           {!gradingMode && (
-            <div className="mt-4">
-              <AutoGrowTextarea
-                value={input}
-                placeholder={
-                  !problem
-                    ? 'まず問題を選んでください'
-                    : waitingFeedback
-                      ? '（まず「解決できましたか？」に回答してください）'
-                      : '自由入力（Enterで送信、Shift+Enterで改行 / Tabでインデント）'
-                }
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={(e) => {
-                  // ★ waitingFeedback or loading 中はキーハンドリングしない
-                  if (waitingFeedback || loading) return
-                  if (e.key === 'Tab') {
-                    e.preventDefault()
-                    const el = e.currentTarget
-                    const start = el.selectionStart ?? 0
-                    const end = el.selectionEnd ?? 0
-                    const indent = '  '
-                    const next = input.slice(0, start) + indent + input.slice(end)
-                    setInput(next)
-                    requestAnimationFrame(() => { (el as any).selectionStart = (el as any).selectionEnd = start + indent.length })
-                  }
-                  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend() }
-                }}
-                maxVh={70}
-                disabled={waitingFeedback || !problem}
-              />
-              <div className="mt-1 flex items-center justify-between text-xs text-gray-600">
-                <div>{input.split('\n').length} 行 / {input.length} 文字</div>
+            <div className="mt-4 space-y-2">
+              {/* 質問タイプボタン群 */}
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <span className="text-gray-600">質問のパターンから選ぶ：</span>
                 <button
-                  className="bg-blue-600 text-white px-4 py-2 rounded disabled:opacity-50"
-                  onClick={handleSend}
-                  disabled={sendDisabled || !input.trim()}
+                  type="button"
+                  className="px-2 py-1 rounded border bg-red-50 hover:bg-red-100"
+                  onClick={() => {
+                    if (!problem || waitingFeedback || loading) return
+                    setQuestionMode('error')
+                    insertTemplate(TEMPLATE_ERROR)
+                  }}
+                  disabled={!problem || waitingFeedback || loading}
                 >
-                  {loading ? '送信中...' : '自由入力で送信'}
+                  🟥 エラー・例外の相談
+                </button>
+                <button
+                  type="button"
+                  className="px-2 py-1 rounded border bg-blue-50 hover:bg-blue-100"
+                  onClick={() => {
+                    if (!problem || waitingFeedback || loading) return
+                    setQuestionMode('syntax')
+                    insertTemplate(TEMPLATE_SYNTAX)
+                  }}
+                  disabled={!problem || waitingFeedback || loading}
+                >
+                  🟦 文法・書き方の相談
+                </button>
+                <button
+                  type="button"
+                  className="px-2 py-1 rounded border bg-green-50 hover:bg-green-100"
+                  onClick={() => {
+                    if (!problem || waitingFeedback || loading) return
+                    setQuestionMode('review')
+                    insertTemplate(TEMPLATE_REVIEW)
+                  }}
+                  disabled={!problem || waitingFeedback || loading}
+                >
+                  🟩 コードレビュー・バグの相談
+                </button>
+                <button
+                  type="button"
+                  className="px-2 py-1 rounded border bg-yellow-50 hover:bg-yellow-100"
+                  onClick={() => {
+                    if (!problem || waitingFeedback || loading) return
+                    setQuestionMode('algo')
+                    insertTemplate(TEMPLATE_ALGO)
+                  }}
+                  disabled={!problem || waitingFeedback || loading}
+                >
+                  🟨 理論・アルゴリズムの相談
+                </button>
+                {/* ★ 新しい自由記述ボタン（テンプレなし・最初はこれも含めボタンのみ表示） */}
+                <button
+                  type="button"
+                  className="px-2 py-1 rounded border bg-purple-50 hover:bg-purple-100"
+                  onClick={() => {
+                    if (!problem || waitingFeedback || loading) return
+                    setQuestionMode('free')
+                    setInput('')   // テンプレ挿入はしない
+                  }}
+                  disabled={!problem || waitingFeedback || loading}
+                >
+                  🟪 自由記述の相談
                 </button>
               </div>
+
+              {/* まだどのボタンも選ばれていないときの案内 */}
+              {questionMode === 'none' && (
+                <div className="text-xs text-gray-500 mt-1">
+                  まず上のボタンから質問の種類を選んでください。自由に書きたい場合は「自由記述の相談」を押してください。
+                </div>
+              )}
+
+              {/* ボタンが押されたあとだけテキストエリア＋送信ボタンを表示 */}
+              {questionMode !== 'none' && (
+                <>
+                  <AutoGrowTextarea
+                    value={input}
+                    placeholder={
+                      !problem
+                        ? 'まず問題を選んでください'
+                        : waitingFeedback
+                          ? '（まず「解決できましたか？」に回答してください）'
+                          : questionMode === 'free'
+                            ? 'ここに自由に質問内容を書いてください（Enterで送信、Shift+Enterで改行 / Tabでインデント）'
+                            : 'テンプレートの続きを埋めてください（Enterで送信、Shift+Enterで改行 / Tabでインデント）'
+                    }
+                    onChange={(e) => setInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (waitingFeedback || loading) return
+                      if (e.key === 'Tab') {
+                        e.preventDefault()
+                        const el = e.currentTarget
+                        const start = el.selectionStart ?? 0
+                        const end = el.selectionEnd ?? 0
+                        const indent = '  '
+                        const next = input.slice(0, start) + indent + input.slice(end)
+                        setInput(next)
+                        requestAnimationFrame(() => {
+                          (el as any).selectionStart = (el as any).selectionEnd = start + indent.length
+                        })
+                      }
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault()
+                        handleSend()
+                      }
+                    }}
+                    maxVh={70}
+                    disabled={waitingFeedback || !problem}
+                  />
+                  <div className="mt-1 flex items-center justify-between text-xs text-gray-600">
+                    <div>{input.split('\n').length} 行 / {input.length} 文字</div>
+                    <button
+                      className="bg-blue-600 text-white px-4 py-2 rounded disabled:opacity-50"
+                      onClick={handleSend}
+                      disabled={sendDisabled || !input.trim()}
+                    >
+                      {loading ? '送信中...' : '送信'}
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
           )}
         </div>

@@ -1,13 +1,10 @@
 // src/app/login/page.tsx
 'use client';
 
-import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
-import { signInWithEmailAndPassword } from 'firebase/auth';
-import { auth, db } from '@/lib/firebase';
-import { idToEmail } from '@/lib/nameToEmail';
-import { doc, setDoc } from 'firebase/firestore';
+import { db } from '@/lib/firebase';
+import { doc, setDoc, getDoc, serverTimestamp } from 'firebase/firestore';
 
 /** 全角→半角・前後空白除去・英字大文字化 */
 const normalizeSeat = (raw: string) =>
@@ -18,40 +15,47 @@ const normalizeSeat = (raw: string) =>
     .trim()
     .toUpperCase();
 
-/** A〜L + 01〜08 のみ許可（必要に応じて調整） */
+/** A〜L + 01〜08 のみ許可（必要なら変更可能） */
 const isValidSeat = (seat: string) => /^[A-L](0[1-8])$/.test(seat);
 
-/** できるだけ多くの場所に保存（chat 画面の探索ロジックと互換） */
-async function saveSeatEverywhere(seat: string) {
+/** ローカル保存（chat ページの互換維持） */
+async function saveSeatLocal(seat: string, studentId: string) {
   try {
-    // local/sessionStorage
     localStorage.setItem('seatNumber', seat);
-    localStorage.setItem('seat', seat);
-    localStorage.setItem('userSettings', JSON.stringify({ seatNumber: seat }));
-    sessionStorage.setItem('seat', seat);
+    localStorage.setItem('studentId', studentId);
 
-    // セッションAPI（サーバー側で使うなら）
+    localStorage.setItem(
+      'userSettings',
+      JSON.stringify({ seatNumber: seat, studentId })
+    );
+
+    sessionStorage.setItem('seat', seat);
+    sessionStorage.setItem('studentId', studentId);
+
     await fetch('/api/session/seat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ seat }),
+      body: JSON.stringify({ seat, studentId }),
     });
-  } catch {
-    // Storageやfetch失敗は致命的でないので握りつぶす
-  }
+  } catch {}
+}
 
-  // Firestore の /users/{uid} にも書いておく（Settings なし運用のため）
-  try {
-    const user = auth.currentUser;
-    if (user) {
-      await setDoc(
-        doc(db, 'users', user.uid),
-        { seatNumber: seat },
-        { merge: true }
-      );
-    }
-  } catch {
-    // ここで失敗してもチャット保存は localStorage 経由で動くため継続
+async function upsertStudent(studentId: string, seat: string) {
+  const ref = doc(db, 'students', studentId);
+  const snap = await getDoc(ref);
+
+  if (snap.exists()) {
+    await setDoc(
+      ref,
+      { seatNumber: seat, updatedAt: serverTimestamp() },
+      { merge: true }
+    );
+  } else {
+    await setDoc(ref, {
+      studentId,
+      seatNumber: seat,
+      createdAt: serverTimestamp(),
+    });
   }
 }
 
@@ -59,7 +63,6 @@ export default function LoginPage() {
   const router = useRouter();
   const [studentId, setStudentId] = useState('');
   const [seat, setSeat] = useState('');
-  const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -68,8 +71,14 @@ export default function LoginPage() {
     setLoading(true);
     setError('');
 
+    const sid = studentId.trim();
     const seatNormalized = normalizeSeat(seat);
 
+    if (!sid) {
+      setLoading(false);
+      setError('学籍番号を入力してください。');
+      return;
+    }
     if (!isValidSeat(seatNormalized)) {
       setLoading(false);
       setError('席番号は A01〜L08 の形式で入力してください。');
@@ -77,16 +86,17 @@ export default function LoginPage() {
     }
 
     try {
-      const email = idToEmail(studentId.trim());
-      await signInWithEmailAndPassword(auth, email, password);
+      // Firestore の students に upsert
+      await upsertStudent(sid, seatNormalized);
 
-      // 席番号をクライアント/サーバー/Firestore に保存
-      await saveSeatEverywhere(seatNormalized);
+      // ローカル保存
+      await saveSeatLocal(seatNormalized, sid);
 
-      // ✅ ログイン成功でチャットへ
+      // チャットへ
       router.push('/chat');
-    } catch {
-      setError('学籍番号またはパスワードが正しくありません');
+    } catch (err) {
+      console.error(err);
+      setError('ログイン処理でエラーが発生しました。');
     } finally {
       setLoading(false);
     }
@@ -94,7 +104,7 @@ export default function LoginPage() {
 
   const seatHelp =
     seat && !isValidSeat(normalizeSeat(seat))
-      ? '例: A01 / B08（英字+2桁）。全角でもOK。'
+      ? '例: A01 / B08（英字+2桁、全角可）'
       : '';
 
   return (
@@ -120,39 +130,22 @@ export default function LoginPage() {
             onChange={(e) => setSeat(e.target.value)}
             onBlur={(e) => setSeat(normalizeSeat(e.target.value))}
             placeholder="A01"
-            inputMode="text"
             className="w-full border p-2 rounded"
             required
           />
-          {seatHelp && <p className="text-xs text-gray-500 mt-1">{seatHelp}</p>}
-        </div>
-
-        <div>
-          <label className="block text-sm mb-1">パスワード</label>
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            className="w-full border p-2 rounded"
-            required
-          />
+          {seatHelp && <p className="text-xs text-gray-500">{seatHelp}</p>}
         </div>
 
         <button
           type="submit"
-          className="bg-blue-600 text-white px-4 py-2 rounded disabled:opacity-50"
           disabled={loading}
+          className="bg-blue-600 text-white px-4 py-2 rounded disabled:opacity-50"
         >
-          {loading ? 'ログイン中...' : 'ログイン'}
+          {loading ? '処理中...' : 'ログイン'}
         </button>
+
         {error && <p className="text-red-500 mt-2">{error}</p>}
       </form>
-
-      <div className="mt-4">
-        <Link href="/register" className="text-blue-600 underline">
-          新規登録はこちら
-        </Link>
-      </div>
     </main>
   );
 }
