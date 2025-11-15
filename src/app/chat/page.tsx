@@ -5,6 +5,7 @@ import React, {
   useEffect, useMemo, useRef, useState, ReactNode,
   forwardRef, useImperativeHandle,
 } from 'react'
+import Link from 'next/link'
 
 // Firestore / Auth
 import { collection, addDoc, serverTimestamp, doc, getDoc } from 'firebase/firestore'
@@ -110,7 +111,7 @@ const BASE_TEACHER_PROMPT = (lang: string) => String.raw`
 目的は、学習者が自分のコードの“どの位置に何を書くか”を理解すること。
 
 [出力範囲の制限（最重要）]
-- 学習者が質問した箇所以外の要素を出さない。
+- 学習者が質問した箇所以外の元素を出さない。
 - 「全体像」や「次に書く部分」を先回りして出さない。
 
 [最優先禁止ルール]
@@ -183,72 +184,87 @@ const GRADING_PROMPT = String.raw`
 - 模範コード全文貼付
 `.trim()
 
+/* ===== テンプレ（ステップUIで利用） ===== */
+/* ===== テンプレ（ステップUIで利用） ===== */
 const TEMPLATE_ERROR = `【エラー・例外の相談】
 
-※正確に判断するには、できるだけ詳しい情報が必要です…。  
- 私も完璧ではないので、いただいた情報が多いほど  
+※正確に判断するには、できるだけ詳しい情報が必要です…。
+ 私も完璧ではないので、いただいた情報が多いほど
  より正確に原因を特定できると思います。
 
 １：エラーメッセージ全文（コピペでOK）
-
+→
 
 ２：実行したコード（全部）
-
-
-３：どのタイミング・操作でエラーが出たか
-
-
-４：本当はどう動いてほしかったか
-
-`;
+→
+`
 
 const TEMPLATE_SYNTAX = `【文法・書き方の相談】
 
-※あなたの理解度に合わせて説明したいので…  
- どこまで理解していて、どこが不安なのか  
+※あなたの理解度に合わせて説明したいので…
+ どこまで理解していて、どこが不安なのか
  少しだけ教えていただけると助かります。
 
 １：使いたいものの名前（メソッド / 変数）
    例：nextInt、length、parseInt など
-
+→
 
 ２：どう動かしたいか（目的）
    例：文字列の長さを整数で取りたい、ランダムに選びたいなど
-
-
-３：今どこまで理解できていて、どこが分からないか
-   例：length と length() の違いが分からない
-
-`;
+→
+`
 
 const TEMPLATE_REVIEW = `【コードレビュー・バグの相談】
 
-※的確な指摘をするには、期待する動きと  
- 実際の動きを比べる必要があります。  
+※的確な指摘をするには、期待する動きと
+ 実際の動きを比べる必要があります。
 
 １：コード全体
-
+→
 
 ２：期待していた出力・動作
-
+→
 
 ３：実際に起こっている出力・動作
-
-`;
+→
+`
 
 const TEMPLATE_ALGO = `【理論・アルゴリズムの相談】
 
-※あなたの理解度に合わせて説明したいので…  
+※あなたの理解度に合わせて説明したいので…
  どの部分が難しかったか、少しだけ教えてください。
 
-１：理解できていないポイント  
+１：理解できていないポイント
 （例：式の意味／処理の流れ／概念そのもの など）
+→
+`
 
-`;
 
+/* ===== テンプレにステップ入力をはめ込むユーティリティ ===== */
+function fillTemplate(template: string, answers: string[]): string {
+  const parts = template.split('→')
+  if (parts.length === 1) return template
+  let result = parts[0]
+  for (let i = 0; i < answers.length; i++) {
+    const part = parts[i + 1] ?? ''
+    result += (answers[i] || '') + part
+  }
+  if (parts.length > answers.length + 1) {
+    result += parts.slice(answers.length + 1).join('→')
+  }
+  return result
+}
 
 /* ===== 型 ===== */
-type Message = { role: 'user' | 'assistant'; content: string; mode?: 'normal' | 'grading' }
+type QuestionMode = 'none' | 'error' | 'syntax' | 'review' | 'algo' | 'free'
+type QuestionTypeForLog = Exclude<QuestionMode, 'none'> | 'unknown'
+
+type Message = {
+  role: 'user' | 'assistant'
+  content: string
+  mode?: 'normal' | 'grading'
+  questionType?: QuestionTypeForLog
+}
 type ProblemFile = { filename: string; code: string; language?: string }
 type Problem = { id: string; title: string; description: string; solution_files: ProblemFile[] }
 
@@ -496,7 +512,7 @@ function getBestCodeBlock(md: string, preferLang?: string | null): { lang: strin
   return best
 }
 
-/* ================== Chat API ストリーム読取り（SSE/非SSE両対応） ================== */
+/* ================== Chat API ストリーム読取り ================== */
 async function streamChat(
   message: string,
   onDelta?: (delta: string) => void,
@@ -510,7 +526,6 @@ async function streamChat(
     signal: ac.signal,
   });
 
-  // 非ストリーム（同期）レスポンス
   if (!res.body) {
     const text = await res.text().catch(() => '');
     if (text) onDelta?.(text);
@@ -523,10 +538,9 @@ async function streamChat(
 
   let full = '';
   let lastTick = Date.now();
-  let sseBuffer = '';      // ★ チャンク跨ぎの行崩れ対策
+  let sseBuffer = '';
   let doneBySentinel = false;
 
-  // アイドル監視（サーバが閉じない事故対策）
   const idleTimer = setInterval(() => {
     if (Date.now() - lastTick > idleMs) {
       try { ac.abort(); } catch {}
@@ -544,13 +558,12 @@ async function streamChat(
       if (isSSE) {
         sseBuffer += chunk;
         const lines = sseBuffer.split('\n');
-        sseBuffer = lines.pop() ?? ''; // 最後の未完行をバッファに残す
+        sseBuffer = lines.pop() ?? '';
 
         for (const raw of lines) {
           const line = raw.trim();
           if (!line) continue;
 
-          // event: done / data: [DONE] のどちらにも対応
           if (line.toLowerCase() === 'event: done') {
             doneBySentinel = true;
             await reader.cancel();
@@ -566,7 +579,6 @@ async function streamChat(
             break;
           }
 
-          // JSON/SSE or 素テキスト両対応
           let delta = '';
           try {
             const j = JSON.parse(payload);
@@ -594,26 +606,39 @@ async function streamChat(
 
 /* ================== 画面コンポーネント ================== */
 export default function ChatPage() {
-  const [input, setInput] = useState('')
   const [allMessages, setAllMessages] = useState<{ [problemId: string]: Message[] }>({})
   const [loading, setLoading] = useState(false)
   const [problems, setProblems] = useState<Problem[]>([])
   const [problem, setProblem] = useState<Problem | null>(null)
+
+  // 通常 / 採点モード
   const [gradingMode, setGradingMode] = useState(false)
 
-  // ★ 質問モード（最初は none でテキスト欄を出さない）
-  const [questionMode, setQuestionMode] = useState<
-    'none' | 'error' | 'syntax' | 'review' | 'algo' | 'free'
-  >('none')
+  // ===== 通常モード：質問パターン（ステップ入力） =====
+  const [questionMode, setQuestionMode] = useState<QuestionMode>('none')
+  const [stepIndex, setStepIndex] = useState(0)
+  const stepTextareaRef = useRef<HTMLTextAreaElement | null>(null)
 
-  const insertTemplate = (tpl: string) => {
-    setInput((prev) => {
-      if (!prev.trim()) return tpl
-      return prev.replace(/\s*$/, '') + '\n\n' + tpl
-    })
-  }
+  // エラー相談（2項目：テンプレ順に合わせる）
+  const [errMessage, setErrMessage] = useState('') // １：エラーメッセージ全文
+  const [errCode, setErrCode] = useState('')       // ２：実行したコード（全部）
 
-  // 採点モード UI
+  // 文法・書き方相談（2項目）
+  const [hintQuestion, setHintQuestion] = useState('') // １：使いたいものの名前
+  const [hintCode, setHintCode] = useState('')         // ２：どう動かしたいか（目的）
+
+  // コードレビュー相談（3項目：テンプレ通り）
+  const [reviewCode, setReviewCode] = useState('')
+  const [reviewExpected, setReviewExpected] = useState('')
+  const [reviewActual, setReviewActual] = useState('')
+
+  // 理論・アルゴリズム相談（1項目）
+  const [algoPoint, setAlgoPoint] = useState('')
+
+  // 自由記述（1項目）
+  const [freeText, setFreeText] = useState('')
+
+  // ===== 採点モード UI =====
   const [gradingInputMode, setGradingInputMode] = useState<'files' | 'paste'>('files')
   const [gradingPaste, setGradingPaste] = useState('')
   const pasteTextareaRef = useRef<HTMLTextAreaElement | null>(null)
@@ -637,13 +662,11 @@ export default function ChatPage() {
     const unsub = onAuthStateChanged(auth, async (user) => {
       if (!user) return
       try {
-        // すべての問題の継続時間をリセット
         Object.keys(localStorage).forEach((k) => {
           if (k.startsWith('selAccum:') || k.startsWith('selStart:')) localStorage.removeItem(k)
         })
         setElapsedSec(0)
 
-        // FirestoreのseatNumber → localStorage補完
         const ref = doc(db, 'users', user.uid)
         const snap = await getDoc(ref)
         const fsSeat = normalizeSeatNumber(snap.exists() ? (snap.data() as any).seatNumber : null)
@@ -662,7 +685,12 @@ export default function ChatPage() {
   const [elapsedSec, setElapsedSec] = useState(0)
   const [nudgeCount, setNudgeCount] = useState(0)
   const pad2 = (n: number) => n.toString().padStart(2, '0')
-  const fmtHMS = (sec: number) => { const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60; return (h > 0 ? `${h}:${pad2(m)}` : `${m}`) + `:${pad2(s)}` }
+  const fmtHMS = (sec: number) => {
+    const h = Math.floor(sec / 3600)
+    const m = Math.floor((sec % 3600) / 60)
+    const s = sec % 60
+    return (h > 0 ? `${h}:${pad2(m)}` : `${m}`) + `:${pad2(s)}`
+  }
 
   // 問題一覧
   useEffect(() => {
@@ -682,20 +710,6 @@ export default function ChatPage() {
     setNudgeCount(0)
     setPendingNudge(null)
   }
-
-  // 問題が変わったら入力状態をリセット
-  useEffect(() => {
-    setInput('')
-    setQuestionMode('none')
-  }, [problem])
-
-  // 採点モードに切り替えたときもリセット
-  useEffect(() => {
-    if (gradingMode) {
-      setInput('')
-      setQuestionMode('none')
-    }
-  }, [gradingMode])
 
   // 経過秒 & ナッジ
   const NUDGE_FIRST = 20 * 60
@@ -754,17 +768,6 @@ export default function ChatPage() {
     })
   }
 
-  // （保持）ヒント/エラー用の入力状態（今は使っていないが削除しない）
-  const [openHint, setOpenHint] = useState(false)
-  const [openError, setOpenError] = useState(false)
-  const [hintQuestion, setHintQuestion] = useState('')
-  const [hintCode, setHintCode] = useState('')
-  const [hintContext, setHintContext] = useState('')
-  const [errWhere, setErrWhere] = useState('')
-  const [errMessage, setErrMessage] = useState('')
-  const [errCode, setErrCode] = useState('')
-  const [errThought, setErrThought] = useState('')
-
   const messages: Message[] = useMemo(
     () => (problem ? allMessages[problem.id] || [] : []),
     [problem, allMessages]
@@ -776,13 +779,218 @@ export default function ChatPage() {
     return userText.length > summaryLimit ? userText.slice(-summaryLimit) : userText
   }
 
+    /* ===== ステップUI用 定義 ===== */
+  type StepConfig = {
+    key: string
+    label: string
+    placeholder?: string
+    value: string
+    setValue: (v: string) => void
+  }
+
+  const questionTitle = useMemo(() => {
+    switch (questionMode) {
+      case 'error': return 'エラー・例外の相談'
+      case 'syntax': return '文法・書き方の相談'
+      case 'review': return 'コードレビュー・バグの相談'
+      case 'algo': return '理論・アルゴリズムの相談'
+      case 'free': return '自由記述の相談'
+      default: return ''
+    }
+  }, [questionMode])
+
+  const steps: StepConfig[] = useMemo(() => {
+    const errorIntro = `【エラー・例外の相談】
+
+  ※正確に判断するには、できるだけ詳しい情報が必要です…。
+  私も完璧ではないので、いただいた情報が多いほど
+  より正確に原因を特定できると思います。
+
+  `
+    const syntaxIntro = `【文法・書き方の相談】
+
+  ※あなたの理解度に合わせて説明したいので…
+  どこまで理解していて、どこが不安なのか
+  少しだけ教えていただけると助かります。
+
+  `
+    const reviewIntro = `【コードレビュー・バグの相談】
+
+  ※的確な指摘をするには、期待する動きと
+  実際の動きを比べる必要があります。
+
+  `
+    const algoIntro = `【理論・アルゴリズムの相談】
+
+  ※あなたの理解度に合わせて説明したいので…
+  どの部分が難しかったか、少しだけ教えてください。
+
+  `
+
+    switch (questionMode) {
+      case 'error':
+        // テンプレの順番：
+        // １：エラーメッセージ全文 → ２：実行したコード（全部）
+        return [
+          {
+            key: 'err-msg',
+            label: errorIntro + '１：エラーメッセージ全文（コピペでOK）',
+            placeholder: '例）Exception in thread "main" java.lang.NullPointerException ...',
+            value: errMessage,
+            setValue: setErrMessage,
+          },
+          {
+            key: 'err-code',
+            label: errorIntro + '２：実行したコード（全部）',
+            placeholder: 'エラーが出ているクラスやメソッドを貼り付けてください。',
+            value: errCode,
+            setValue: setErrCode,
+          },
+        ]
+
+      case 'syntax':
+        // テンプレの順番：
+        // １：使いたいものの名前 → ２：どう動かしたいか（目的）
+        return [
+          {
+            key: 'syn-name',
+            label: syntaxIntro + '１：使いたいものの名前（メソッド / 変数）\n   例：nextInt、length、parseInt など',
+            placeholder: '例）nextInt / length / parseInt など',
+            value: hintQuestion,
+            setValue: setHintQuestion,
+          },
+          {
+            key: 'syn-goal',
+            label: syntaxIntro + '２：どう動かしたいか（目的）\n   例：文字列の長さを整数で取りたい、ランダムに選びたいなど',
+            placeholder: '例）文字列の長さを取りたい／ランダムに1つ選びたい など',
+            value: hintCode,
+            setValue: setHintCode,
+          },
+        ]
+
+      case 'review':
+        // テンプレ通り：１コード全体 → ２期待 → ３実際
+        return [
+          {
+            key: 'rev-code',
+            label: reviewIntro + '１：コード全体',
+            placeholder: 'レビューしてほしいコードを貼り付けてください。',
+            value: reviewCode,
+            setValue: setReviewCode,
+          },
+          {
+            key: 'rev-exp',
+            label: reviewIntro + '２：期待していた出力・動作',
+            placeholder: '例）1〜10までの合計が表示されるはず など',
+            value: reviewExpected,
+            setValue: setReviewExpected,
+          },
+          {
+            key: 'rev-actual',
+            label: reviewIntro + '３：実際に起こっている出力・動作',
+            placeholder: '例）0が表示される／何も表示されない など',
+            value: reviewActual,
+            setValue: setReviewActual,
+          },
+        ]
+
+      case 'algo':
+        // テンプレ通り：１ポイントだけ
+        return [
+          {
+            key: 'algo-point',
+            label: algoIntro + '１：理解できていないポイント\n（例：式の意味／処理の流れ／概念そのもの など）',
+            placeholder: '例）再帰の終了条件が分からない／計算量O(n^2)の意味が分からない など',
+            value: algoPoint,
+            setValue: setAlgoPoint,
+          },
+        ]
+
+      case 'free':
+        return [
+          {
+            key: 'free',
+            label: '【自由記述の相談】\n\n授業や課題に関することを自由に書いてください。',
+            placeholder: '例）問題3-2でfor文の条件式がよく分かりません。今は〜のように考えています。',
+            value: freeText,
+            setValue: setFreeText,
+          },
+        ]
+
+      default:
+        return []
+    }
+  }, [
+    questionMode,
+    errMessage, errCode,
+    hintQuestion, hintCode,
+    reviewCode, reviewExpected, reviewActual,
+    algoPoint, freeText,
+  ])
+
+
+  // モード変更時はステップを先頭に戻す
+  useEffect(() => {
+    setStepIndex(0)
+  }, [questionMode])
+
+  // ステップ切り替えごとにフォーカス
+  useEffect(() => {
+    if (!gradingMode && questionMode !== 'none') {
+      setTimeout(() => stepTextareaRef.current?.focus(), 0)
+    }
+  }, [questionMode, stepIndex, gradingMode])
+
+  // 現在の入力から送信テキストを組み立て
+  const currentUserText = useMemo(() => {
+    switch (questionMode) {
+      case 'error': {
+        const answers = [errMessage, errCode] // テンプレの「→」の順番に合わせる
+        if (!answers.some(a => a.trim())) return ''
+        return fillTemplate(TEMPLATE_ERROR, answers)
+      }
+      case 'syntax': {
+        const answers = [hintQuestion, hintCode]
+        if (!answers.some(a => a.trim())) return ''
+        return fillTemplate(TEMPLATE_SYNTAX, answers)
+      }
+      case 'review': {
+        const answers = [reviewCode, reviewExpected, reviewActual]
+        if (!answers.some(a => a.trim())) return ''
+        return fillTemplate(TEMPLATE_REVIEW, answers)
+      }
+      case 'algo': {
+        if (!algoPoint.trim()) return ''
+        return fillTemplate(TEMPLATE_ALGO, [algoPoint])
+      }
+      case 'free':
+        return freeText.trim() ? freeText : ''
+      default:
+        return ''
+    }
+  }, [
+    questionMode,
+    errMessage, errCode,
+    hintQuestion, hintCode,
+    reviewCode, reviewExpected, reviewActual,
+    algoPoint, freeText,
+  ])
+
+
+  const currentLines = currentUserText ? currentUserText.split('\n').length : 0
+  const currentChars = currentUserText.length
+
   /** 送信（通常モードのみ） */
-  const sendWithContext = async (userContent: string) => {
+  const sendWithContext = async (userContent: string, qType: QuestionTypeForLog) => {
     if (!userContent.trim() || !problem) return
-    const userMessage: Message = { role: 'user', content: userContent, mode: gradingMode ? 'grading' : 'normal' }
+    const userMessage: Message = {
+      role: 'user',
+      content: userContent,
+      mode: gradingMode ? 'grading' : 'normal',
+      questionType: qType,
+    }
     const current = [...(allMessages[problem.id] || []), userMessage]
     setAllMessages({ ...allMessages, [problem.id]: current })
-    setInput('')
 
     const summary = buildSummary(current)
     const langGuess = detectLang(userContent, problem)
@@ -834,7 +1042,6 @@ ${outputRule(langGuess)}`
       let teacherRaw = ''
       await streamChat(teacherPrompt, (delta) => {
         teacherRaw += delta
-        // プレビュー抽出（逐次）
         const a = teacherRaw.match(/(?:^|\n)アドバイス[:：]\s*([^\n]+)/)
         const q = teacherRaw.match(/(?:^|\n)質問[:：]\s*([^\n?]+[?？]?)/)
         advicePreview = a ? a[1].trim() : advicePreview
@@ -884,9 +1091,37 @@ ${outputRule(langGuess)}`
   }
 
   const handleSend = async () => {
-    // ★ loading 中もブロック
-    if (!input.trim() || !problem || waitingFeedback || loading) return
-    await sendWithContext(input)
+    if (!problem || waitingFeedback || loading) return
+    if (!currentUserText.trim()) return
+    const qType: QuestionTypeForLog =
+      questionMode === 'none' ? 'unknown' : questionMode
+
+    await sendWithContext(currentUserText, qType)
+
+    // 入力リセット
+    // handleSend 内のリセット部分
+    switch (questionMode) {
+      case 'error':
+        setErrMessage('')
+        setErrCode('')
+        break
+      case 'syntax':
+        setHintQuestion('')
+        setHintCode('')
+        break
+      case 'review':
+        setReviewCode('')
+        setReviewExpected('')
+        setReviewActual('')
+        break
+      case 'algo':
+        setAlgoPoint('')
+        break
+      case 'free':
+        setFreeText('')
+        break
+    }
+    setQuestionMode('none')
   }
 
   /* ===== Firestore 保存（通常モードの会話ログ） ===== */
@@ -901,9 +1136,27 @@ ${outputRule(langGuess)}`
       let assistantMessage = ''
       let userMessage = ''
       let userMode: 'normal' | 'grading' | null = null
+      let userQuestionType: QuestionTypeForLog | null = null
+
       let aIdx = -1
-      for (let i = msgs.length - 1; i >= 0; i--) if (msgs[i].role === 'assistant') { aIdx = i; assistantMessage = msgs[i].content; break }
-      if (aIdx !== -1) for (let j = aIdx - 1; j >= 0; j--) { const m = msgs[j]; if (m.role === 'user') { userMessage = m.content; userMode = m.mode ?? null; break } }
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        if (msgs[i].role === 'assistant') {
+          aIdx = i
+          assistantMessage = msgs[i].content
+          break
+        }
+      }
+      if (aIdx !== -1) {
+        for (let j = aIdx - 1; j >= 0; j--) {
+          const m = msgs[j]
+          if (m.role === 'user') {
+            userMessage = m.content
+            userMode = m.mode ?? null
+            userQuestionType = m.questionType ?? null
+            break
+          }
+        }
+      }
       if (!userMode) userMode = gradingMode ? 'grading' : 'normal'
 
       const { accum, runningAt } = readTimer(problem.id)
@@ -911,11 +1164,20 @@ ${outputRule(langGuess)}`
       const durationSec = Math.max(0, Math.floor(ms / 1000))
 
       await addDoc(collection(db, 'chatLogs'), {
-        userMessage, assistantMessage, resolved,
-        seatNumber: seat ?? null, problemTitle: problem.title, problemId: problem.id,
-        userId: user?.uid ?? null, userEmail: user?.email ?? null,
-        createdAt: serverTimestamp(), answeredAt: serverTimestamp(), durationSec,
-        userMode, answerMode: gradingMode ? 'grading' : 'normal',
+        userMessage,
+        assistantMessage,
+        resolved,
+        seatNumber: seat ?? null,
+        problemTitle: problem.title,
+        problemId: problem.id,
+        userId: user?.uid ?? null,
+        userEmail: user?.email ?? null,
+        createdAt: serverTimestamp(),
+        answeredAt: serverTimestamp(),
+        durationSec,
+        userMode,
+        answerMode: gradingMode ? 'grading' : 'normal',
+        questionType: userQuestionType ?? 'unknown',
       })
     } catch (e) {
       console.error('[Firestore] persistChatLog failed:', e)
@@ -966,7 +1228,6 @@ ${outputRule(langGuess)}`
     if (e.dataTransfer?.files?.length) handlePickFiles(e.dataTransfer.files)
   }
 
-  // ★ Storage URL 取得の安全化（過待ち防止）
   async function safeGetDownloadURL(r: ReturnType<typeof sRef>, timeoutMs = 8000): Promise<string> {
     return await Promise.race<string>([
       getDownloadURL(r),
@@ -974,7 +1235,6 @@ ${outputRule(langGuess)}`
     ]);
   }
 
-  // ★ アップロード自体にもタイムアウト＆計測を付与
   async function safeUploadString(r: ReturnType<typeof sRef>, content: string, timeoutMs = 15000) {
     console.time(`[UPLOAD] ${r.fullPath}`);
     const res = await Promise.race([
@@ -1012,11 +1272,9 @@ ${exemplarForPrompt}
 ${filesForPrompt}
 `
 
-    // ★ 「採点中…」は表示しない（空文字で開始）
     createStreamingAssistant('')
-    let gradingText = ''
     try {
-      gradingText = await streamChat(prompt, (delta) => {
+      await streamChat(prompt, (delta) => {
         updateLastAssistant((prev) => (prev || '') + delta)
       })
     } catch (e) {
@@ -1026,12 +1284,10 @@ ${filesForPrompt}
 
     let saveOk = false
     try {
-      saveOk = await saveGradingSubmission(gradingText)
+      saveOk = await saveGradingSubmission('')
     } finally {
       setLoading(false)
       setGradingSaving(false)
-
-      // ★ 保存成功時に添付ファイルと貼り付け内容をリセット
       if (saveOk) {
         setUploads([])
         setGradingPaste('')
@@ -1053,7 +1309,6 @@ ${filesForPrompt}
     const base = `gradingSubmissions/${problem.id}/${uid}/${Date.now()}`
     const startTs = Date.now()
 
-    // 監視：全体 25 秒で強制警告（UIは finally で必ず戻る）
     const watchdog = setTimeout(() => {
       console.error('[SAVE] watchdog fired (took >25s)')
     }, 25000)
@@ -1115,7 +1370,8 @@ ${filesForPrompt}
   }
 
   /* ============ 画面描画 ============ */
-  const sendDisabled = !problem || loading || waitingFeedback
+  const sendDisabled = !problem || loading || waitingFeedback || !currentUserText.trim()
+
   return (
     <>
       <main className="flex h-screen">
@@ -1169,7 +1425,7 @@ ${filesForPrompt}
                   type="checkbox"
                   className="sr-only peer"
                   checked={gradingMode}
-                  onChange={(e) => { setGradingMode(e.target.checked) }}
+                  onChange={(e) => { setGradingMode(e.target.checked); setQuestionMode('none') }}
                   disabled={waitingFeedback}
                 />
                 <div className={`w-11 h-6 rounded-full transition-all ${waitingFeedback ? 'bg-gray-300' : 'bg-gray-200 peer-checked:bg-green-500'}`} />
@@ -1245,7 +1501,7 @@ ${filesForPrompt}
             <div ref={bottomRef} />
           </div>
 
-          {/* ===== 採点モードUI（ファイル or 貼り付け） ===== */}
+          {/* ===== 採点モードUI ===== */}
           {problem && !waitingFeedback && gradingMode && (
             <div className="mb-3 border rounded p-3 bg-slate-50 space-y-3">
               <div className="text-sm font-semibold">採点モード提出（どちらか選択）</div>
@@ -1273,7 +1529,6 @@ ${filesForPrompt}
                 </label>
               </div>
 
-              {/* === ファイル提出 === */}
               {gradingInputMode === 'files' && (
                 <div
                   onDragOver={(e) => e.preventDefault()}
@@ -1286,7 +1541,7 @@ ${filesForPrompt}
                       下の「ファイルを選ぶ」からも追加可能。提出前は一覧から<strong>削除</strong>・<strong>追加</strong>ができます。
                     </p>
                     <label
-                      className="cursor-pointer text-xs bg-sky-600 text-white px-3 py-1.5 rounded hover:opacity-90 shadow"
+                      className="cursor-pointer text-xs bg-sky-600 text-white px-3 py-1.5 rounded hover:opacity-90.shadow"
                       title="ファイル選択"
                     >
                       ファイルを選ぶ
@@ -1321,7 +1576,6 @@ ${filesForPrompt}
                 </div>
               )}
 
-              {/* === 貼り付け === */}
               {gradingInputMode === 'paste' && (
                 <div className="space-y-2">
                   <div className="border-2 border-dashed rounded-2xl p-4 bg-white/70 hover:bg-white transition-colors">
@@ -1377,130 +1631,158 @@ ${filesForPrompt}
             </div>
           )}
 
-          {/* 通常モードの自由入力（採点モードでは非表示） */}
+          {/* ===== 通常モード：ステップ入力 UI ===== */}
           {!gradingMode && (
-            <div className="mt-4 space-y-2">
-              {/* 質問タイプボタン群 */}
+            <div className="mt-4 space-y-3">
+              {/* 質問パターン選択 */}
               <div className="flex flex-wrap items-center gap-2 text-xs">
                 <span className="text-gray-600">質問のパターンから選ぶ：</span>
+
                 <button
                   type="button"
-                  className="px-2 py-1 rounded border bg-red-50 hover:bg-red-100"
-                  onClick={() => {
-                    if (!problem || waitingFeedback || loading) return
-                    setQuestionMode('error')
-                    insertTemplate(TEMPLATE_ERROR)
-                  }}
+                  className={`px-2 py-1 rounded border ${questionMode === 'error' ? 'bg-red-200' : 'bg-red-50 hover:bg-red-100'}`}
+                  onClick={() => setQuestionMode('error')}
                   disabled={!problem || waitingFeedback || loading}
                 >
                   🟥 エラー・例外の相談
                 </button>
                 <button
                   type="button"
-                  className="px-2 py-1 rounded border bg-blue-50 hover:bg-blue-100"
-                  onClick={() => {
-                    if (!problem || waitingFeedback || loading) return
-                    setQuestionMode('syntax')
-                    insertTemplate(TEMPLATE_SYNTAX)
-                  }}
+                  className={`px-2 py-1 rounded border ${questionMode === 'syntax' ? 'bg-blue-200' : 'bg-blue-50 hover:bg-blue-100'}`}
+                  onClick={() => setQuestionMode('syntax')}
                   disabled={!problem || waitingFeedback || loading}
                 >
                   🟦 文法・書き方の相談
                 </button>
                 <button
                   type="button"
-                  className="px-2 py-1 rounded border bg-green-50 hover:bg-green-100"
-                  onClick={() => {
-                    if (!problem || waitingFeedback || loading) return
-                    setQuestionMode('review')
-                    insertTemplate(TEMPLATE_REVIEW)
-                  }}
+                  className={`px-2 py-1 rounded border ${questionMode === 'review' ? 'bg-green-200' : 'bg-green-50 hover:bg-green-100'}`}
+                  onClick={() => setQuestionMode('review')}
                   disabled={!problem || waitingFeedback || loading}
                 >
                   🟩 コードレビュー・バグの相談
                 </button>
                 <button
                   type="button"
-                  className="px-2 py-1 rounded border bg-yellow-50 hover:bg-yellow-100"
-                  onClick={() => {
-                    if (!problem || waitingFeedback || loading) return
-                    setQuestionMode('algo')
-                    insertTemplate(TEMPLATE_ALGO)
-                  }}
+                  className={`px-2 py-1 rounded border ${questionMode === 'algo' ? 'bg-yellow-200' : 'bg-yellow-50 hover:bg-yellow-100'}`}
+                  onClick={() => setQuestionMode('algo')}
                   disabled={!problem || waitingFeedback || loading}
                 >
                   🟨 理論・アルゴリズムの相談
                 </button>
-                {/* ★ 新しい自由記述ボタン（テンプレなし・最初はこれも含めボタンのみ表示） */}
                 <button
                   type="button"
-                  className="px-2 py-1 rounded border bg-purple-50 hover:bg-purple-100"
-                  onClick={() => {
-                    if (!problem || waitingFeedback || loading) return
-                    setQuestionMode('free')
-                    setInput('')   // テンプレ挿入はしない
-                  }}
+                  className={`px-2 py-1 rounded border ${questionMode === 'free' ? 'bg-purple-200' : 'bg-purple-50 hover:bg-purple-100'}`}
+                  onClick={() => setQuestionMode('free')}
                   disabled={!problem || waitingFeedback || loading}
                 >
                   🟪 自由記述の相談
                 </button>
               </div>
 
-              {/* まだどのボタンも選ばれていないときの案内 */}
+              {/* パターン未選択時の案内 */}
               {questionMode === 'none' && (
-                <div className="text-xs text-gray-500 mt-1">
-                  まず上のボタンから質問の種類を選んでください。自由に書きたい場合は「自由記述の相談」を押してください。
+                <div className="border rounded p-3 text-xs text-gray-600 bg-gray-50">
+                  まず上のボタンのどれかを選んでください。選んだ内容に応じて、1項目ずつ入力する画面が表示されます。
                 </div>
               )}
 
-              {/* ボタンが押されたあとだけテキストエリア＋送信ボタンを表示 */}
+              {/* ステップ入力本体 */}
               {questionMode !== 'none' && (
-                <>
-                  <AutoGrowTextarea
-                    value={input}
-                    placeholder={
-                      !problem
-                        ? 'まず問題を選んでください'
-                        : waitingFeedback
-                          ? '（まず「解決できましたか？」に回答してください）'
-                          : questionMode === 'free'
-                            ? 'ここに自由に質問内容を書いてください（Enterで送信、Shift+Enterで改行 / Tabでインデント）'
-                            : 'テンプレートの続きを埋めてください（Enterで送信、Shift+Enterで改行 / Tabでインデント）'
-                    }
-                    onChange={(e) => setInput(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (waitingFeedback || loading) return
-                      if (e.key === 'Tab') {
-                        e.preventDefault()
-                        const el = e.currentTarget
-                        const start = el.selectionStart ?? 0
-                        const end = el.selectionEnd ?? 0
-                        const indent = '  '
-                        const next = input.slice(0, start) + indent + input.slice(end)
-                        setInput(next)
-                        requestAnimationFrame(() => {
-                          (el as any).selectionStart = (el as any).selectionEnd = start + indent.length
-                        })
-                      }
-                      if (e.key === 'Enter' && !e.shiftKey) {
-                        e.preventDefault()
-                        handleSend()
-                      }
-                    }}
-                    maxVh={70}
-                    disabled={waitingFeedback || !problem}
-                  />
-                  <div className="mt-1 flex items-center justify-between text-xs text-gray-600">
-                    <div>{input.split('\n').length} 行 / {input.length} 文字</div>
-                    <button
-                      className="bg-blue-600 text-white px-4 py-2 rounded disabled:opacity-50"
-                      onClick={handleSend}
-                      disabled={sendDisabled || !input.trim()}
-                    >
-                      {loading ? '送信中...' : '送信'}
-                    </button>
+                <div className="border rounded p-3 bg-white space-y-3">
+                  <div className="flex items-center justify-between text-xs">
+                    <div className="font-semibold">{questionTitle}</div>
+                    <div className="text-gray-600">
+                      入力 {steps.length === 0 ? '0/0' : `${stepIndex + 1}/${steps.length}`}
+                    </div>
                   </div>
-                </>
+
+                  {steps.length > 0 && (
+                    <>
+                      <div className="space-y-1">
+                        <div className="text-xs font-semibold whitespace-pre-wrap">{steps[stepIndex].label}</div>
+                        <AutoGrowTextarea
+                          ref={stepTextareaRef as any}
+                          value={steps[stepIndex].value}
+                          onChange={(e) => steps[stepIndex].setValue(e.target.value)}
+                          placeholder={steps[stepIndex].placeholder}
+                          maxVh={50}
+                          className="min-h-[8rem] rounded-xl"
+                          onKeyDown={(e) => {
+                            if (waitingFeedback || loading) return
+                            const current = steps[stepIndex]
+                            if (e.key === 'Tab') {
+                              e.preventDefault()
+                              const el = e.currentTarget
+                              const start = el.selectionStart ?? 0
+                              const end = el.selectionEnd ?? 0
+                              const indent = '  '
+                              const v = current.value || ''
+                              const next = v.slice(0, start) + indent + v.slice(end)
+                              current.setValue(next)
+                              requestAnimationFrame(() => {
+                                (el as any).selectionStart = (el as any).selectionEnd = start + indent.length
+                              })
+                            }
+                            if (e.key === 'Enter' && !e.shiftKey) {
+                              e.preventDefault()
+                              if (stepIndex < steps.length - 1) {
+                                setStepIndex(stepIndex + 1)
+                              } else {
+                                handleSend()
+                              }
+                            }
+                          }}
+                        />
+                      </div>
+
+                      <div className="flex items-center justify-between text-xs mt-2">
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            className="px-2 py-1 rounded border hover:bg-gray-50"
+                            onClick={() => setQuestionMode('none')}
+                          >
+                            ← パターン選択に戻る
+                          </button>
+                          {steps.length > 1 && (
+                            <>
+                              <button
+                                type="button"
+                                className="px-2 py-1 rounded border hover:bg-gray-50 disabled:opacity-40"
+                                onClick={() => setStepIndex((i) => Math.max(0, i - 1))}
+                                disabled={stepIndex === 0}
+                              >
+                                ◀ 前へ
+                              </button>
+                              <button
+                                type="button"
+                                className="px-2 py-1 rounded border hover:bg-gray-50 disabled:opacity-40"
+                                onClick={() => setStepIndex((i) => Math.min(steps.length - 1, i + 1))}
+                                disabled={stepIndex >= steps.length - 1}
+                              >
+                                次へ ▶
+                              </button>
+                            </>
+                          )}
+                        </div>
+
+                        <div className="flex items-center gap-3">
+                          <span className="text-gray-500">
+                            {currentLines} 行 / {currentChars} 文字
+                          </span>
+                          <button
+                            className="bg-blue-600 text-white px-4 py-2 rounded disabled:opacity-50"
+                            onClick={handleSend}
+                            disabled={sendDisabled}
+                          >
+                            {loading ? '送信中...' : '送信'}
+                          </button>
+                        </div>
+                      </div>
+                    </>
+                  )}
+                </div>
               )}
             </div>
           )}
