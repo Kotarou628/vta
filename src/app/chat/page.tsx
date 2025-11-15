@@ -8,7 +8,14 @@ import React, {
 import Link from 'next/link'
 
 // Firestore / Auth
-import { collection, addDoc, serverTimestamp, doc, getDoc } from 'firebase/firestore'
+import {
+  collection,
+  addDoc,
+  serverTimestamp,
+  doc,
+  getDoc,
+  setDoc,              // ★ 追加
+} from 'firebase/firestore'
 import { onAuthStateChanged } from 'firebase/auth'
 import { db, auth } from '@/lib/firebase'
 
@@ -652,18 +659,23 @@ export default function ChatPage() {
   const [lastAssistantIndex, setLastAssistantIndex] = useState<number | null>(null)
   const [pendingNudge, setPendingNudge] = useState<string | null>(null)
 
-  // ===== seatNumber 初期取得 & ログイン時の全タイマーリセット =====
+  // ===== seatNumber / studentId 初期取得 & ログイン時の全タイマーリセット =====
   const [seatNumber, setSeatNumber] = useState<string | null>(null)
+  const [studentId, setStudentId] = useState<string | null>(null)       // ★ 学籍番号
+  const [studentDocId, setStudentDocId] = useState<string | null>(null) // ★ students ドキュメントID
+
   useEffect(() => {
     setSeatNumber(getSeatNumberFromStorage())
     const onStorage = () => setSeatNumber(getSeatNumberFromStorage())
     window.addEventListener('storage', onStorage)
     return () => window.removeEventListener('storage', onStorage)
   }, [])
+
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (user) => {
       if (!user) return
       try {
+        // ログイン時にタイマー全リセット
         Object.keys(localStorage).forEach((k) => {
           if (k.startsWith('selAccum:') || k.startsWith('selStart:')) localStorage.removeItem(k)
         })
@@ -671,17 +683,55 @@ export default function ChatPage() {
 
         const ref = doc(db, 'users', user.uid)
         const snap = await getDoc(ref)
-        const fsSeat = normalizeSeatNumber(snap.exists() ? (snap.data() as any).seatNumber : null)
+        const data = snap.exists() ? (snap.data() as any) : null
+
+        const fsSeat = normalizeSeatNumber(data?.seatNumber ?? null)
         if (fsSeat && !getSeatNumberFromStorage()) {
           localStorage.setItem('seatNumber', fsSeat)
           setSeatNumber(fsSeat)
         }
+
+        // ★ 学籍番号を users ドキュメント or メールから推定
+        let sid: string | null = null
+        if (data?.studentId) {
+          sid = String(data.studentId)
+        } else if (user.email) {
+          const m = user.email.match(/\d{7,}/) // 7桁以上の数字を学籍番号候補として抽出
+          if (m) sid = m[0]
+        }
+        setStudentId(sid || null)
       } catch (e) {
-        console.warn('[seatNumber] fallback fetch failed:', e)
+        console.warn('[seatNumber/studentId] fetch failed:', e)
       }
     })
     return () => unsub()
   }, [])
+
+  // ★ seatNumber / studentId から students ドキュメントを用意
+  useEffect(() => {
+    const seat = normalizeSeatNumber(getSeatNumberFromStorage() ?? seatNumber ?? null)
+    if (!seat && !studentId) return
+
+    const docId = studentId || auth.currentUser?.uid || null
+    if (!docId) return
+
+    const ref = doc(db, 'students', docId)
+    ;(async () => {
+      try {
+        const snap = await getDoc(ref)
+        const base: any = {}
+        if (studentId) base.studentId = studentId
+        if (seat) base.seatNumber = seat
+        if (!snap.exists()) {
+          base.createdAt = serverTimestamp()
+        }
+        await setDoc(ref, base, { merge: true })
+        setStudentDocId(docId)
+      } catch (e) {
+        console.warn('[students] ensure doc failed:', e)
+      }
+    })()
+  }, [seatNumber, studentId])
 
   // ====== タイマー ======
   const [elapsedSec, setElapsedSec] = useState(0)
@@ -704,6 +754,31 @@ export default function ChatPage() {
     localStorage.setItem('chatMessages', JSON.stringify(allMessages))
   }, [allMessages])
 
+  // ★ students コレクションの timer / problem 情報を更新
+  const updateStudentTimerForProblem = async (p: Problem, opts: { resetTimer?: boolean } = {}) => {
+    const docId = studentDocId || studentId || auth.currentUser?.uid || null
+    if (!docId) return
+
+    const seat = normalizeSeatNumber(getSeatNumberFromStorage() ?? seatNumber ?? null)
+    const ref = doc(db, 'students', docId)
+
+    const payload: any = {
+      studentId: studentId ?? null,
+      seatNumber: seat ?? null,
+      currentProblemId: p.id,
+      currentProblemTitle: p.title,
+    }
+    if (opts.resetTimer) {
+      payload.timerStartedAt = serverTimestamp()
+    }
+
+    try {
+      await setDoc(ref, payload, { merge: true })
+    } catch (e) {
+      console.warn('[students] update timer failed:', e)
+    }
+  }
+
   // 問題切替
   const handleSelectProblem = (p: Problem) => {
     if (problem) pauseTimer(problem.id)
@@ -711,6 +786,8 @@ export default function ChatPage() {
     resumeTimer(p.id)
     setNudgeCount(0)
     setPendingNudge(null)
+    // ★ 新しい問題を選択したタイミングで timerStartedAt をリセット
+    updateStudentTimerForProblem(p, { resetTimer: true })
   }
 
   // 経過秒 & ナッジ
@@ -1403,6 +1480,14 @@ ${filesForPrompt}
   /* ============ 画面描画 ============ */
   const sendDisabled = !problem || loading || waitingFeedback || !isQuestionValid
 
+  // ★ タイマー再開ボタンからも Firestore の timerStartedAt を更新
+  const handleTimerRestartClick = async () => {
+    if (!problem || waitingFeedback) return
+    pauseTimer(problem.id)
+    resumeTimer(problem.id)
+    await updateStudentTimerForProblem(problem, { resetTimer: true })
+  }
+
   return (
     <>
       <main className="flex h-screen">
@@ -1440,8 +1525,8 @@ ${filesForPrompt}
               {problem && <span className="text-xs px-2 py-1 rounded border bg-white">⏱ 継続: {fmtHMS(elapsedSec)}</span>}
               <button
                 className={`border px-2 py-1 rounded text-xs ${waitingFeedback ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-50'}`}
-                onClick={() => { if (!problem || waitingFeedback) return; pauseTimer(problem.id); resumeTimer(problem.id) }}
-                disabled={waitingFeedback}
+                onClick={handleTimerRestartClick}
+                disabled={waitingFeedback || !problem}
               >
                 タイマー再開
               </button>
@@ -1666,7 +1751,7 @@ ${filesForPrompt}
           {!gradingMode && (
             <div className="mt-4 space-y-3">
               {/* 質問パターン選択 */}
-              <div className="flex flex-wrap items-center gap-2 text-xs">
+              <div className="flex flex-wrap.items-center gap-2 text-xs">
                 <span className="text-gray-600">質問のパターンから選ぶ：</span>
 
                 <button
