@@ -136,6 +136,12 @@ const BASE_TEACHER_PROMPT = (lang: string) => String.raw`
 - 行頭に必ず「アドバイス:」「質問:」を付け、「コード例:」の直後に \`\`\`${lang} で開始すること。
 `.trim()
 
+// ★ 授業内容（教員が毎回編集するメモ）
+const CURRENT_LESSON_DESCRIPTION = String.raw`
+本日の授業では「配列」「for文／拡張for文」「メソッド定義と呼び出し」などを扱っています。
+※必要に応じて、この文章を授業ごとに書き換えてください。
+`.trim()
+
 const buildAbstractPrompt = (lang: string, snippet: string) => {
   const langName = (lang || 'java').toLowerCase()
   const shownLang =
@@ -159,14 +165,12 @@ const buildAbstractPrompt = (lang: string, snippet: string) => {
 4. **コメントは残しつつ抽象語に置換。**
 5. **コンパイル不要（構造理解が目的）。**
 6. **出力は\`${shownLang}\`のコードブロックのみ。**
-
-【変換対象（最重要）】下のスニペット範囲だけ。
 `.trim()
 
   return String.raw`
 ${rules}
 
-【抽出スニペット】
+【変換対象（最重要）】下のスニペット範囲だけ。
 \`\`\`${shownLang}
 ${snippet || '// (抽出できる部分が見つかりませんでした)'}
 \`\`\`
@@ -204,11 +208,9 @@ const TEMPLATE_ERROR = `【エラー・例外の相談】
 const TEMPLATE_SYNTAX = `【文法・書き方の相談】
 
 １：使いたいものの名前（メソッド / 変数）
-   例：nextInt、length、parseInt など
 →
 
 ２：どう動かしたいか（目的）
-   例：文字列の長さを整数で取りたい、ランダムに選びたいなど
 →
 `
 
@@ -229,7 +231,6 @@ const TEMPLATE_ALGO = `【理論・アルゴリズムの相談】
 １：理解できていないポイント
 →
 `
-
 
 /* ===== テンプレにステップ入力をはめ込むユーティリティ ===== */
 function fillTemplate(template: string, answers: string[]): string {
@@ -258,6 +259,24 @@ type Message = {
 }
 type ProblemFile = { filename: string; code: string; language?: string }
 type Problem = { id: string; title: string; description: string; solution_files: ProblemFile[] }
+
+/* ===== モード説明文 ===== */
+function describeQuestionMode(q: QuestionTypeForLog): string {
+  switch (q) {
+    case 'error':
+      return 'エラー・例外の相談です。エラーメッセージとコードをもとに、原因と修正方針を説明してください。'
+    case 'review':
+      return 'コードレビュー・バグの相談です。期待する動作と実際の動作を比べて、バグの原因や改善点を説明してください。'
+    case 'syntax':
+      return '文法・書き方の相談です。構文や書き方の理解を助ける説明と、最小限のコード例を示してください。'
+    case 'algo':
+      return '理論・アルゴリズムの相談です。式の意味や処理の流れ・計算量など、概念的な理解を助けてください。'
+    case 'free':
+      return '自由記述の相談です。設計や学習の進め方など、学生の悩みに合わせて助言してください。'
+    default:
+      return '相談の種類は明示されていません。質問内容から適切に判断してください。'
+  }
+}
 
 /* ===== 問題文ハイライト ===== */
 const KW_H = /(重要|ポイント|要件|仕様|条件|制約|注意|入力|出力|手順|実装手順|目的|ヒント|制限|例|例外|評価|採点)/
@@ -403,7 +422,7 @@ function detectLang(text: string, problem?: Problem): string {
   return 'java'
 }
 
-/* ===== 抽出ユーティリティ ===== */
+/* ===== 抽出ユーティリティ（現在は未使用だが将来拡張用に保持） ===== */
 type ExtractIntent = { wantClass: boolean; wantFields: boolean; wantCtor: boolean; wantMethods: boolean }
 function deriveIntent(userContent: string): ExtractIntent {
   const t = (userContent || '').toLowerCase()
@@ -486,7 +505,7 @@ function extractFromProblem(problem: Problem, intent: ExtractIntent): { snippet:
   return { snippet: best, lang: bestLang }
 }
 
-/* ===== コードブロック抽出 ===== */
+/* ===== コードブロック抽出（現在は未使用だが保持） ===== */
 function getBestCodeBlock(md: string, preferLang?: string | null): { lang: string | null; code: string } | null {
   const re = /```([\w#+-]*)\n([\s\S]*?)```/g
   let m: RegExpExecArray | null
@@ -1072,6 +1091,8 @@ export default function ChatPage() {
   /** 送信（通常モードのみ） */
   const sendWithContext = async (userContent: string, qType: QuestionTypeForLog) => {
     if (!userContent.trim() || !problem) return
+
+    // 1. チャット欄＆ログ用のユーザーメッセージはそのまま保存
     const userMessage: Message = {
       role: 'user',
       content: userContent,
@@ -1081,96 +1102,83 @@ export default function ChatPage() {
     const current = [...(allMessages[problem.id] || []), userMessage]
     setAllMessages({ ...allMessages, [problem.id]: current })
 
+    // 2. LLM 用プロンプトをモード別に組み立て
     const summary = buildSummary(current)
     const langGuess = detectLang(userContent, problem)
+    const lang = langGuess || 'java'
+    const modeDesc = describeQuestionMode(qType)
 
-    const exemplarForPrompt = (problem.solution_files || [])
-      .map((f) => {
-        const l = (f.language && f.language.trim()) || detectLang(f.code)
-        return `// ${f.filename || '(no name)'}\n\`\`\`${l}\n${f.code}\n\`\`\``
-      })
-      .join('\n\n')
+    let promptForLLM = ''
 
-    setLoading(true)
-    createStreamingAssistant('生成中…')
-    let advicePreview = ''
-    let questionPreview = ''
-    let codeLang = langGuess || 'java'
-    let abstractBuffer = ''
-    let lastFlush = 0
-    const renderNow = () => {
-      const head: string[] = []
-      if (advicePreview) head.push(`アドバイス: ${advicePreview}`)
-      if (questionPreview) head.push(`質問: ${questionPreview}`)
-      const headText = head.length ? head.join('\n\n') + '\n\n' : ''
-      const codePart =
-        abstractBuffer
-          ? `コード例:\n\`\`\`${codeLang}\n${prettyCodeAuto(abstractBuffer)}\n\`\`\``
-          : 'コード例:\n```\n（抽象化コードを生成中…）\n```'
-      updateLastAssistant(headText + codePart)
-    }
+    if (qType === 'error' || qType === 'review') {
+      // 🟥 エラー・例外 / 🟩 コードレビュー・バグ
+      const exemplarForPrompt = (problem.solution_files || [])
+        .map((f) => {
+          const l = (f.language && f.language.trim()) || detectLang(f.code)
+          return `// ${f.filename || '(no name)'}\n\`\`\`${l}\n${f.code}\n\`\`\``
+        })
+        .join('\n\n')
 
-    try {
-      const teacherPrompt = `${BASE_TEACHER_PROMPT(langGuess)}
+      promptForLLM = String.raw`${BASE_TEACHER_PROMPT(lang)}
 
-【問題文】
+【相談モード】
+${modeDesc}
+
+【今回の授業内容（教員メモ）】
+${CURRENT_LESSON_DESCRIPTION}
+
+【今回扱っている問題】
+${problem.title}
 ${problem.description}
 
-【模範コード（複数可）】
-${exemplarForPrompt || '(なし)'}
+【模範コード（参考・任意）】
+${exemplarForPrompt || '(この問題には模範コードが設定されていません)'}
 
 【これまでの履歴要約】
 ${summary}
 
-【質問/学生の考え】
+【学生のコード・エラーや挙動の説明】
 ${userContent}
 
-${outputRule(langGuess)}`
+${outputRule(lang)}`
+    } else {
+      // 🟦 文法・書き方 / 🟨 理論・アルゴリズム / 🟪 自由記述
+      // → 問題文・模範コードは送らず、変数名を変えるルールだけ追加
+      promptForLLM = String.raw`${BASE_TEACHER_PROMPT(lang)}
 
-      // ===== 教員ステップ
-      let teacherRaw = ''
-      await streamChat(teacherPrompt, (delta) => {
-        teacherRaw += delta
-        const a = teacherRaw.match(/(?:^|\n)アドバイス[:：]\s*([^\n]+)/)
-        const q = teacherRaw.match(/(?:^|\n)質問[:：]\s*([^\n?]+[?？]?)/)
-        advicePreview = a ? a[1].trim() : advicePreview
-        questionPreview = q ? q[1].trim() : questionPreview
-        renderNow()
+【相談モード】
+${modeDesc}
+
+【これまでの履歴要約】
+${summary}
+
+【学生の質問/考え】
+${userContent}
+
+[追加ルール（重要）]
+- コード例を出すときは、現在授業で扱っている問題や模範コードで使われているものとは
+  「全く違う変数名・メソッド名・クラス名」を使ってください。
+  例: sum → totalX, count → itemCnt, Main → SampleDemo など。
+- ただし、役割が分からなくならないように、意味が想像しやすい名前（value1, totalCount など）にしてください。
+- 正解コード全体や、そのまま提出すると通ってしまう完成コードは出さないでください。
+- あくまで「考え方」と「部分的なコード例」にとどめてください。
+
+${outputRule(lang)}`
+    }
+
+    // 3. 1回の呼び出しでストリーミング表示（抽象化ステップは使わない）
+    setLoading(true)
+    createStreamingAssistant('')
+
+    try {
+      await streamChat(promptForLLM, (delta) => {
+        updateLastAssistant((prev) => (prev || '') + delta)
       })
 
-      // ===== 抽象化ステップ
-      let snippet = ''
-      const picked = getBestCodeBlock(teacherRaw, langGuess)
-      if (picked && picked.code.trim()) {
-        snippet = picked.code
-        codeLang = picked.lang || codeLang
-      } else {
-        const intent = deriveIntent(userContent)
-        const ex = extractFromProblem(problem, intent)
-        snippet = ex.snippet
-        codeLang = ex.lang || codeLang
-      }
-      if (!advicePreview) advicePreview = 'インスタンスフィールドの宣言とコンストラクタの役割を整理しましょう。'
-      if (!questionPreview) questionPreview = 'どのフィールドをどの初期値で宣言しますか？'
-      renderNow()
-
-      const abstractPrompt = buildAbstractPrompt(codeLang, snippet)
-      let insideFence = false
-      await streamChat(abstractPrompt, (delta) => {
-        const open = delta.match(/```([\w#+-]*)\s*$/)
-        const close = delta.match(/```/)
-        if (open && !insideFence) { if (open[1]) codeLang = open[1]; insideFence = true; return }
-        if (insideFence && close) { insideFence = false; return }
-        if (insideFence || delta.trim()) { abstractBuffer += delta }
-        const now = performance.now()
-        if (now - lastFlush > 200) { lastFlush = now; renderNow() }
-      })
-
-      renderNow()
       setLastAssistantIndex((allMessages[problem.id]?.length ?? 0) + 1)
       setWaitingFeedback(true)
     } catch (e) {
-      console.error('[ERROR] 通常モード統合フロー失敗:', e)
+      console.error('[ERROR] 通常モードフロー失敗:', e)
       updateLastAssistant('処理中にエラーが発生しました。もう一度お試しください。')
       setWaitingFeedback(false)
     } finally {
@@ -1325,7 +1333,7 @@ ${outputRule(langGuess)}`
     ]);
   }
 
-  async function safeUploadString(r: ReturnType<typeof sRef>, content: string, timeoutMs = 15000) {
+  async function safeUploadString(r: ReturnType<typeof sRef>, content: string, timeoutMs = 15015) {
     console.time(`[UPLOAD] ${r.fullPath}`);
     const res = await Promise.race([
       uploadString(r, content, 'raw', { contentType: 'text/plain; charset=utf-8' }),
@@ -1518,7 +1526,7 @@ ${filesForPrompt}
           <div className="flex items-center gap-4 mb-4">
             <div className="flex items-center gap-2">
               <span className={!gradingMode ? 'font-bold' : 'text-gray-400'}>通常モード</span>
-              <label className="mx-2 relative inline-flex items-center cursor-pointer">
+              <label className="mx-2 relative inline-flex items-center.cursor-pointer">
                 <input
                   type="checkbox"
                   className="sr-only peer"
@@ -1604,7 +1612,7 @@ ${filesForPrompt}
             <div className="mb-3 border rounded p-3 bg-slate-50 space-y-3">
               <div className="text-sm font-semibold">採点モード提出（どちらか選択）</div>
 
-              <div className="flex items-center gap-6 text-sm">
+              <div className="flex.items-center gap-6 text-sm">
                 <label className="flex items-center gap-2">
                   <input
                     type="radio"
@@ -1677,7 +1685,7 @@ ${filesForPrompt}
               {gradingInputMode === 'paste' && (
                 <div className="space-y-2">
                   <div className="border-2 border-dashed rounded-2xl p-4 bg-white/70 hover:bg-white transition-colors">
-                    <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center justify-between.mb-2">
                       <div className="text-sm font-semibold">ここに<strong>コード全文</strong>を貼り付け（Ctrl+V / ⌘V）</div>
                       <button
                         type="button"
@@ -1867,7 +1875,7 @@ ${filesForPrompt}
                                     </button>
                                     <button
                                       type="button"
-                                      className="px-2 py-1 rounded border hover:bg-gray-50 disabled:opacity-40"
+                                      className="px-2 py-1 rounded border.hover:bg-gray-50.disabled:opacity-40"
                                       onClick={() =>
                                         setStepIndex((i) => Math.min(steps.length - 1, i + 1))
                                       }
