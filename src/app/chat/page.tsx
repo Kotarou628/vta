@@ -185,7 +185,6 @@ const GRADING_PROMPT = String.raw`
 `.trim()
 
 /* ===== テンプレ（ステップUIで利用） ===== */
-/* ===== テンプレ（ステップUIで利用） ===== */
 const TEMPLATE_ERROR = `【エラー・例外の相談】
 
 ※正確に判断するには、できるだけ詳しい情報が必要です…。
@@ -204,6 +203,10 @@ const TEMPLATE_SYNTAX = `【文法・書き方の相談】
 ※あなたの理解度に合わせて説明したいので…
  どこまで理解していて、どこが不安なのか
  少しだけ教えていただけると助かります。
+
+※２の「どう動かしたいか（目的）」は *任意* です。
+ 書ける範囲で構いませんが、書いてもらえると
+ よりあなたの状況に合った説明がしやすくなります。
 
 １：使いたいものの名前（メソッド / 変数）
    例：nextInt、length、parseInt など
@@ -238,7 +241,6 @@ const TEMPLATE_ALGO = `【理論・アルゴリズムの相談】
 （例：式の意味／処理の流れ／概念そのもの など）
 →
 `
-
 
 /* ===== テンプレにステップ入力をはめ込むユーティリティ ===== */
 function fillTemplate(template: string, answers: string[]): string {
@@ -779,7 +781,7 @@ export default function ChatPage() {
     return userText.length > summaryLimit ? userText.slice(-summaryLimit) : userText
   }
 
-    /* ===== ステップUI用 定義 ===== */
+  /* ===== ステップUI用 定義 ===== */
   type StepConfig = {
     key: string
     label: string
@@ -802,35 +804,37 @@ export default function ChatPage() {
   const steps: StepConfig[] = useMemo(() => {
     const errorIntro = `【エラー・例外の相談】
 
-  ※正確に判断するには、できるだけ詳しい情報が必要です…。
-  私も完璧ではないので、いただいた情報が多いほど
-  より正確に原因を特定できると思います。
+※正確に判断するには、できるだけ詳しい情報が必要です…。
+ 私も完璧ではないので、いただいた情報が多いほど
+ より正確に原因を特定できると思います。
 
-  `
+`
     const syntaxIntro = `【文法・書き方の相談】
 
-  ※あなたの理解度に合わせて説明したいので…
-  どこまで理解していて、どこが不安なのか
-  少しだけ教えていただけると助かります。
+※あなたの理解度に合わせて説明したいので…
+ どこまで理解していて、どこが不安なのか
+ 少しだけ教えていただけると助かります。
 
-  `
+※２の「どう動かしたいか（目的）」は *任意* です。
+ 書ける範囲で構いませんが、書いてもらえると
+ よりあなたの状況に合った説明がしやすくなります。
+
+`
     const reviewIntro = `【コードレビュー・バグの相談】
 
-  ※的確な指摘をするには、期待する動きと
-  実際の動きを比べる必要があります。
+※的確な指摘をするには、期待する動きと
+ 実際の動きを比べる必要があります。
 
-  `
+`
     const algoIntro = `【理論・アルゴリズムの相談】
 
-  ※あなたの理解度に合わせて説明したいので…
-  どの部分が難しかったか、少しだけ教えてください。
+※あなたの理解度に合わせて説明したいので…
+ どの部分が難しかったか、少しだけ教えてください。
 
-  `
+`
 
     switch (questionMode) {
       case 'error':
-        // テンプレの順番：
-        // １：エラーメッセージ全文 → ２：実行したコード（全部）
         return [
           {
             key: 'err-msg',
@@ -849,27 +853,31 @@ export default function ChatPage() {
         ]
 
       case 'syntax':
-        // テンプレの順番：
-        // １：使いたいものの名前 → ２：どう動かしたいか（目的）
         return [
           {
             key: 'syn-name',
-            label: syntaxIntro + '１：使いたいものの名前（メソッド / 変数）\n   例：nextInt、length、parseInt など',
-            placeholder: '例）nextInt / length / parseInt など',
+            label:
+              syntaxIntro +
+              '１：使いたいものの名前（メソッド / 変数）\n' +
+              '   例：拡張for文、nextInt、length、parseInt など',
+            placeholder: '例）拡張for文の書き方／nextInt の使い方 など',
             value: hintQuestion,
             setValue: setHintQuestion,
           },
           {
             key: 'syn-goal',
-            label: syntaxIntro + '２：どう動かしたいか（目的）\n   例：文字列の長さを整数で取りたい、ランダムに選びたいなど',
-            placeholder: '例）文字列の長さを取りたい／ランダムに1つ選びたい など',
+            label:
+              syntaxIntro +
+              '２：どう動かしたいか（目的）※任意（書ける範囲でOK）\n' +
+              '   例：配列の全要素を順番に取り出したい など',
+            placeholder:
+              '（任意）例）配列の中身を順番に表示したい／文字列から1文字ずつ取り出したい など',
             value: hintCode,
             setValue: setHintCode,
           },
         ]
 
       case 'review':
-        // テンプレ通り：１コード全体 → ２期待 → ３実際
         return [
           {
             key: 'rev-code',
@@ -895,7 +903,6 @@ export default function ChatPage() {
         ]
 
       case 'algo':
-        // テンプレ通り：１ポイントだけ
         return [
           {
             key: 'algo-point',
@@ -928,7 +935,6 @@ export default function ChatPage() {
     algoPoint, freeText,
   ])
 
-
   // モード変更時はステップを先頭に戻す
   useEffect(() => {
     setStepIndex(0)
@@ -945,7 +951,7 @@ export default function ChatPage() {
   const currentUserText = useMemo(() => {
     switch (questionMode) {
       case 'error': {
-        const answers = [errMessage, errCode] // テンプレの「→」の順番に合わせる
+        const answers = [errMessage, errCode]
         if (!answers.some(a => a.trim())) return ''
         return fillTemplate(TEMPLATE_ERROR, answers)
       }
@@ -976,9 +982,33 @@ export default function ChatPage() {
     algoPoint, freeText,
   ])
 
-
   const currentLines = currentUserText ? currentUserText.split('\n').length : 0
   const currentChars = currentUserText.length
+
+  // モードごとの「必須項目が埋まっているか」判定
+  const isQuestionValid = useMemo(() => {
+    switch (questionMode) {
+      case 'error':
+        return !!errMessage.trim() && !!errCode.trim()
+      case 'syntax':
+        // 「使いたいもの」は必須、「目的」は任意
+        return !!hintQuestion.trim()
+      case 'review':
+        return !!reviewCode.trim() && !!reviewExpected.trim() && !!reviewActual.trim()
+      case 'algo':
+        return !!algoPoint.trim()
+      case 'free':
+        return !!freeText.trim()
+      default:
+        return false
+    }
+  }, [
+    questionMode,
+    errMessage, errCode,
+    hintQuestion, hintCode,
+    reviewCode, reviewExpected, reviewActual,
+    algoPoint, freeText,
+  ])
 
   /** 送信（通常モードのみ） */
   const sendWithContext = async (userContent: string, qType: QuestionTypeForLog) => {
@@ -1092,14 +1122,15 @@ ${outputRule(langGuess)}`
 
   const handleSend = async () => {
     if (!problem || waitingFeedback || loading) return
-    if (!currentUserText.trim()) return
+    if (!isQuestionValid) return
+    const text = currentUserText.trim()
+    if (!text) return
     const qType: QuestionTypeForLog =
       questionMode === 'none' ? 'unknown' : questionMode
 
-    await sendWithContext(currentUserText, qType)
+    await sendWithContext(text, qType)
 
     // 入力リセット
-    // handleSend 内のリセット部分
     switch (questionMode) {
       case 'error':
         setErrMessage('')
@@ -1370,7 +1401,7 @@ ${filesForPrompt}
   }
 
   /* ============ 画面描画 ============ */
-  const sendDisabled = !problem || loading || waitingFeedback || !currentUserText.trim()
+  const sendDisabled = !problem || loading || waitingFeedback || !isQuestionValid
 
   return (
     <>
@@ -1699,87 +1730,101 @@ ${filesForPrompt}
 
                   {steps.length > 0 && (
                     <>
-                      <div className="space-y-1">
-                        <div className="text-xs font-semibold whitespace-pre-wrap">{steps[stepIndex].label}</div>
-                        <AutoGrowTextarea
-                          ref={stepTextareaRef as any}
-                          value={steps[stepIndex].value}
-                          onChange={(e) => steps[stepIndex].setValue(e.target.value)}
-                          placeholder={steps[stepIndex].placeholder}
-                          maxVh={50}
-                          className="min-h-[8rem] rounded-xl"
-                          onKeyDown={(e) => {
-                            if (waitingFeedback || loading) return
-                            const current = steps[stepIndex]
-                            if (e.key === 'Tab') {
-                              e.preventDefault()
-                              const el = e.currentTarget
-                              const start = el.selectionStart ?? 0
-                              const end = el.selectionEnd ?? 0
-                              const indent = '  '
-                              const v = current.value || ''
-                              const next = v.slice(0, start) + indent + v.slice(end)
-                              current.setValue(next)
-                              requestAnimationFrame(() => {
-                                (el as any).selectionStart = (el as any).selectionEnd = start + indent.length
-                              })
-                            }
-                            if (e.key === 'Enter' && !e.shiftKey) {
-                              e.preventDefault()
-                              if (stepIndex < steps.length - 1) {
-                                setStepIndex(stepIndex + 1)
-                              } else {
-                                handleSend()
-                              }
-                            }
-                          }}
-                        />
-                      </div>
+                      {(() => {
+                        const totalSteps = steps.length
+                        const currentStep = steps[stepIndex]
+                        const isLastStep = stepIndex === totalSteps - 1
+                        const canGoNext = stepIndex < totalSteps - 1
 
-                      <div className="flex items-center justify-between text-xs mt-2">
-                        <div className="flex items-center gap-2">
-                          <button
-                            type="button"
-                            className="px-2 py-1 rounded border hover:bg-gray-50"
-                            onClick={() => setQuestionMode('none')}
-                          >
-                            ← パターン選択に戻る
-                          </button>
-                          {steps.length > 1 && (
-                            <>
-                              <button
-                                type="button"
-                                className="px-2 py-1 rounded border hover:bg-gray-50 disabled:opacity-40"
-                                onClick={() => setStepIndex((i) => Math.max(0, i - 1))}
-                                disabled={stepIndex === 0}
-                              >
-                                ◀ 前へ
-                              </button>
-                              <button
-                                type="button"
-                                className="px-2 py-1 rounded border hover:bg-gray-50 disabled:opacity-40"
-                                onClick={() => setStepIndex((i) => Math.min(steps.length - 1, i + 1))}
-                                disabled={stepIndex >= steps.length - 1}
-                              >
-                                次へ ▶
-                              </button>
-                            </>
-                          )}
-                        </div>
+                        return (
+                          <>
+                            <div className="space-y-1">
+                              <div className="text-xs font-semibold whitespace-pre-wrap">
+                                {currentStep.label}
+                              </div>
+                              <AutoGrowTextarea
+                                ref={stepTextareaRef as any}
+                                value={currentStep.value}
+                                onChange={(e) => currentStep.setValue(e.target.value)}
+                                placeholder={currentStep.placeholder}
+                                maxVh={50}
+                                className="min-h-[8rem] rounded-xl"
+                                onKeyDown={(e) => {
+                                  if (waitingFeedback || loading) return
+                                  if (e.key === 'Tab') {
+                                    e.preventDefault()
+                                    const el = e.currentTarget
+                                    const start = el.selectionStart ?? 0
+                                    const end = el.selectionEnd ?? 0
+                                    const indent = '  '
+                                    const v = currentStep.value || ''
+                                    const next = v.slice(0, start) + indent + v.slice(end)
+                                    currentStep.setValue(next)
+                                    requestAnimationFrame(() => {
+                                      (el as any).selectionStart = (el as any).selectionEnd = start + indent.length
+                                    })
+                                  }
+                                  if (e.key === 'Enter' && !e.shiftKey) {
+                                    e.preventDefault()
+                                    const total = steps.length
+                                    const isLast = stepIndex === total - 1
+                                    if (isLast) {
+                                      if (sendDisabled) return
+                                      handleSend()
+                                    } else {
+                                      setStepIndex(stepIndex + 1)
+                                    }
+                                  }
+                                }}
+                              />
+                            </div>
 
-                        <div className="flex items-center gap-3">
-                          <span className="text-gray-500">
-                            {currentLines} 行 / {currentChars} 文字
-                          </span>
-                          <button
-                            className="bg-blue-600 text-white px-4 py-2 rounded disabled:opacity-50"
-                            onClick={handleSend}
-                            disabled={sendDisabled}
-                          >
-                            {loading ? '送信中...' : '送信'}
-                          </button>
-                        </div>
-                      </div>
+                            <div className="flex items-center justify-between text-xs mt-2">
+                              <div className="flex items-center gap-2">
+                                <button
+                                  type="button"
+                                  className="px-2 py-1 rounded border hover:bg-gray-50"
+                                  onClick={() => setQuestionMode('none')}
+                                >
+                                  ← パターン選択に戻る
+                                </button>
+                                {steps.length > 1 && (
+                                  <>
+                                    <button
+                                      type="button"
+                                      className="px-2 py-1 rounded border hover:bg-gray-50 disabled:opacity-40"
+                                      onClick={() => setStepIndex((i) => Math.max(0, i - 1))}
+                                      disabled={stepIndex === 0}
+                                    >
+                                      ◀ 前へ
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="px-2 py-1 rounded border hover:bg-gray-50 disabled:opacity-40"
+                                      onClick={() =>
+                                        setStepIndex((i) => Math.min(steps.length - 1, i + 1))
+                                      }
+                                      disabled={!canGoNext}
+                                    >
+                                      次へ ▶
+                                    </button>
+                                  </>
+                                )}
+                              </div>
+
+                              <div className="flex items-center gap-3">
+                                <button
+                                  className="bg-blue-600 text-white px-4 py-2 rounded disabled:opacity-50"
+                                  onClick={handleSend}
+                                  disabled={sendDisabled}
+                                >
+                                  {loading ? '送信中...' : '送信'}
+                                </button>
+                              </div>
+                            </div>
+                          </>
+                        )
+                      })()}
                     </>
                   )}
                 </div>
