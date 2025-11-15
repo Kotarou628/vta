@@ -9,6 +9,7 @@ import {
   orderBy,
   limit,
   Timestamp,
+  onSnapshot,
 } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
 
@@ -85,7 +86,10 @@ const isSameDay = (ts: Timestamp | null | undefined, nowMs: number) => {
 }
 
 // 経過時間（分）を計算
-const diffMinutesFromNow = (startedAt: Timestamp | null | undefined, nowMs: number) => {
+const diffMinutesFromNow = (
+  startedAt: Timestamp | null | undefined,
+  nowMs: number
+) => {
   if (!startedAt) return null
   const startMs = startedAt.toDate().getTime()
   const diff = nowMs - startMs
@@ -99,24 +103,6 @@ const seatBgClassByMinutes = (minutes: number | null): string => {
   if (minutes < 20) return 'bg-white'
   if (minutes < 30) return 'bg-amber-100'
   return 'bg-red-200'
-}
-
-// 質問タイプの日本語ラベル
-const questionTypeLabel = (t?: QuestionType | null): string => {
-  switch (t) {
-    case 'error':
-      return 'エラー・例外'
-    case 'syntax':
-      return '文法・書き方'
-    case 'review':
-      return 'コードレビュー'
-    case 'algo':
-      return '理論・アルゴリズム'
-    case 'free':
-      return '自由記述'
-    default:
-      return '不明'
-  }
 }
 
 // 座席ブロック定義（画像のレイアウト準拠）
@@ -178,7 +164,7 @@ export default function TeacherPage() {
     return () => clearInterval(id)
   }, [])
 
-  // ---- 初回に問題リストを収集（chatLogs から） ----
+  // ---- 問題リスト取得（chatLogs から一度だけ。必要なら「再読み込み」で更新）----
   useEffect(() => {
     const fetchProblems = async () => {
       try {
@@ -198,7 +184,10 @@ export default function TeacherPage() {
             }
           }
         })
-        const list = Array.from(map.entries()).map(([id, title]) => ({ id, title }))
+        const list = Array.from(map.entries()).map(([id, title]) => ({
+          id,
+          title,
+        }))
         setProblemOptions(list)
       } catch (e) {
         console.error('[teacher] fetchProblems failed:', e)
@@ -207,113 +196,119 @@ export default function TeacherPage() {
     fetchProblems()
   }, [])
 
-  // ---- チャットログ取得 ----
-  const fetchChatLogs = async () => {
-    setChatLoading(true)
-    try {
-      const qBase = query(
-        collection(db, 'chatLogs'),
-        orderBy('createdAt', 'desc'),
-        limit(limitCount)
-      )
-
-      const snap = await getDocs(qBase)
-      const list: ChatLog[] = []
-      snap.forEach((docSnap) => {
-        const d = docSnap.data() as any
-        list.push({
-          id: docSnap.id,
-          userMessage: d.userMessage ?? '',
-          assistantMessage: d.assistantMessage ?? '',
-          resolved: !!d.resolved,
-          seatNumber: d.seatNumber ?? null,
-          problemTitle: d.problemTitle ?? '',
-          problemId: d.problemId ?? '',
-          userId: d.userId ?? null,
-          userEmail: d.userEmail ?? null,
-          createdAt: d.createdAt ?? null,
-          durationSec: d.durationSec,
-          userMode: d.userMode,
-          answerMode: d.answerMode,
-          questionType: d.questionType ?? 'unknown',
-        })
-      })
-
-      setChatLogs(list)
-    } catch (e) {
-      console.error('[teacher] fetchChatLogs failed:', e)
-    } finally {
-      setChatLoading(false)
-    }
-  }
-
-  // ---- 採点提出取得 ----
-  const fetchSubmissions = async () => {
-    setSubLoading(true)
-    try {
-      const snap = await getDocs(
-        query(
-          collection(db, 'submissions'),
-          orderBy('submittedAt', 'desc'),
-          limit(limitCount)
-        )
-      )
-      const list: Submission[] = []
-      snap.forEach((docSnap) => {
-        const d = docSnap.data() as any
-        list.push({
-          id: docSnap.id,
-          mode: d.mode ?? '',
-          problemId: d.problemId ?? '',
-          problemTitle: d.problemTitle ?? '',
-          userId: d.userId ?? null,
-          userEmail: d.userEmail ?? null,
-          seatNumber: d.seatNumber ?? null,
-          submittedAt: d.submittedAt ?? null,
-          durationSec: d.durationSec,
-          files: Array.isArray(d.files) ? d.files : [],
-          inputMode: d.inputMode,
-        })
-      })
-      setSubmissions(list)
-    } catch (e) {
-      console.error('[teacher] fetchSubmissions failed:', e)
-    } finally {
-      setSubLoading(false)
-    }
-  }
-
-  // ---- students（座席情報）取得 ----
-  const fetchStudents = async () => {
-    setStudentsLoading(true)
-    try {
-      const snap = await getDocs(collection(db, 'students'))
-      const list: StudentSeat[] = []
-      snap.forEach((docSnap) => {
-        const d = docSnap.data() as any
-        if (!d.seatNumber) return
-        list.push({
-          id: docSnap.id,
-          seatNumber: (d.seatNumber as string).toUpperCase(),
-          currentProblemId: d.currentProblemId ?? null,
-          currentProblemTitle: d.currentProblemTitle ?? null,
-          startedAt: d.startedAt ?? null,
-        })
-      })
-      setStudents(list)
-    } catch (e) {
-      console.error('[teacher] fetchStudents failed:', e)
-    } finally {
-      setStudentsLoading(false)
-    }
-  }
-
-  // 初回ロード
+  // ---- チャットログのリアルタイム購読 ----
   useEffect(() => {
-    fetchChatLogs()
-    fetchSubmissions()
-    fetchStudents()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    setChatLoading(true)
+    const qBase = query(
+      collection(db, 'chatLogs'),
+      orderBy('createdAt', 'desc'),
+      limit(limitCount)
+    )
+
+    const unsub = onSnapshot(
+      qBase,
+      (snap) => {
+        const list: ChatLog[] = []
+        snap.forEach((docSnap) => {
+          const d = docSnap.data() as any
+          list.push({
+            id: docSnap.id,
+            userMessage: d.userMessage ?? '',
+            assistantMessage: d.assistantMessage ?? '',
+            resolved: !!d.resolved,
+            seatNumber: d.seatNumber ?? null,
+            problemTitle: d.problemTitle ?? '',
+            problemId: d.problemId ?? '',
+            userId: d.userId ?? null,
+            userEmail: d.userEmail ?? null,
+            createdAt: d.createdAt ?? null,
+            durationSec: d.durationSec,
+            userMode: d.userMode,
+            answerMode: d.answerMode,
+            questionType: d.questionType ?? 'unknown',
+          })
+        })
+        setChatLogs(list)
+        setChatLoading(false)
+      },
+      (error) => {
+        console.error('[teacher] onSnapshot chatLogs failed:', error)
+        setChatLoading(false)
+      }
+    )
+
+    return () => unsub()
+  }, [limitCount])
+
+  // ---- 採点提出のリアルタイム購読 ----
+  useEffect(() => {
+    setSubLoading(true)
+    const qBase = query(
+      collection(db, 'submissions'),
+      orderBy('submittedAt', 'desc'),
+      limit(limitCount)
+    )
+
+    const unsub = onSnapshot(
+      qBase,
+      (snap) => {
+        const list: Submission[] = []
+        snap.forEach((docSnap) => {
+          const d = docSnap.data() as any
+          list.push({
+            id: docSnap.id,
+            mode: d.mode ?? '',
+            problemId: d.problemId ?? '',
+            problemTitle: d.problemTitle ?? '',
+            userId: d.userId ?? null,
+            userEmail: d.userEmail ?? null,
+            seatNumber: d.seatNumber ?? null,
+            submittedAt: d.submittedAt ?? null,
+            durationSec: d.durationSec,
+            files: Array.isArray(d.files) ? d.files : [],
+            inputMode: d.inputMode,
+          })
+        })
+        setSubmissions(list)
+        setSubLoading(false)
+      },
+      (error) => {
+        console.error('[teacher] onSnapshot submissions failed:', error)
+        setSubLoading(false)
+      }
+    )
+
+    return () => unsub()
+  }, [limitCount])
+
+  // ---- students（座席情報）のリアルタイム購読 ----
+  useEffect(() => {
+    setStudentsLoading(true)
+    const unsub = onSnapshot(
+      collection(db, 'students'),
+      (snap) => {
+        const list: StudentSeat[] = []
+        snap.forEach((docSnap) => {
+          const d = docSnap.data() as any
+          if (!d.seatNumber) return
+          list.push({
+            id: docSnap.id,
+            seatNumber: (d.seatNumber as string).toUpperCase(),
+            currentProblemId: d.currentProblemId ?? null,
+            currentProblemTitle: d.currentProblemTitle ?? null,
+            startedAt: d.startedAt ?? null,
+          })
+        })
+        setStudents(list)
+        setStudentsLoading(false)
+      },
+      (error) => {
+        console.error('[teacher] onSnapshot students failed:', error)
+        setStudentsLoading(false)
+      }
+    )
+
+    return () => unsub()
   }, [])
 
   // フィルタ適用後のチャットログ（本日分のみ）
@@ -351,21 +346,35 @@ export default function TeacherPage() {
     return m
   }, [students])
 
-  // seatNumber → 「本日分の最新チャットの問題ID/タイトル」のマップ
+  // seatNumber → 「本日分の最新チャットの問題ID/タイトル/送信時刻/送信時点の経過秒」のマップ
   const seatLatestProblemMap = useMemo(() => {
-    const m = new Map<string, { problemId: string; title: string }>()
+    const m = new Map<
+      string,
+      {
+        problemId: string
+        title: string
+        createdAt: Timestamp | null
+        durationSec?: number
+      }
+    >()
+
     // chatLogs は createdAt desc で取得しているので、最初に見つけたものが本日分の最新
     chatLogs.forEach((log) => {
       if (!log.seatNumber || !log.problemId) return
       if (!isSameDay(log.createdAt, nowMs)) return
+
       const key = log.seatNumber.toUpperCase()
       if (!m.has(key)) {
         m.set(key, {
           problemId: log.problemId,
           title: log.problemTitle ?? '',
+          createdAt: log.createdAt ?? null,
+          durationSec:
+            typeof log.durationSec === 'number' ? log.durationSec : undefined,
         })
       }
     })
+
     return m
   }, [chatLogs, nowMs])
 
@@ -390,9 +399,35 @@ export default function TeacherPage() {
           <button
             className="text-xs border rounded px-2 py-1 hover:bg-gray-50"
             onClick={() => {
-              fetchChatLogs()
-              fetchSubmissions()
-              fetchStudents()
+              // ★「再読み込み」は主に問題フィルタ用の候補を更新
+              setNowMs(Date.now())
+              ;(async () => {
+                try {
+                  const snap = await getDocs(
+                    query(
+                      collection(db, 'chatLogs'),
+                      orderBy('createdAt', 'desc'),
+                      limit(300)
+                    )
+                  )
+                  const map = new Map<string, string>()
+                  snap.forEach((doc) => {
+                    const d = doc.data() as any
+                    if (d.problemId && d.problemTitle) {
+                      if (!map.has(d.problemId)) {
+                        map.set(d.problemId, d.problemTitle)
+                      }
+                    }
+                  })
+                  const list = Array.from(map.entries()).map(([id, title]) => ({
+                    id,
+                    title,
+                  }))
+                  setProblemOptions(list)
+                } catch (e) {
+                  console.error('[teacher] reload fetchProblems failed:', e)
+                }
+              })()
             }}
           >
             再読み込み
@@ -535,15 +570,36 @@ export default function TeacherPage() {
                           const problemId =
                             seatInfo?.currentProblemId ?? latest?.problemId ?? null
                           const title =
-                            seatInfo?.currentProblemTitle ??
-                            latest?.title ??
-                            ''
+                            seatInfo?.currentProblemTitle ?? latest?.title ?? ''
 
-                          // 本日開始のものだけ時間を出す
-                          const minutesToday =
-                            seatInfo?.startedAt && isSameDay(seatInfo.startedAt, nowMs)
-                              ? diffMinutesFromNow(seatInfo.startedAt, nowMs)
-                              : null
+                          // 経過時間（分）の計算
+                          // 1) students.startedAt が今日にある場合：着席〜現在の経過時間をそのまま使う
+                          let minutesToday: number | null = null
+
+                          if (
+                            seatInfo?.startedAt &&
+                            isSameDay(seatInfo.startedAt, nowMs)
+                          ) {
+                            minutesToday = diffMinutesFromNow(
+                              seatInfo.startedAt,
+                              nowMs
+                            )
+                          } else if (
+                            latest?.createdAt &&
+                            isSameDay(latest.createdAt, nowMs)
+                          ) {
+                            // 2) startedAt が無い場合
+                            //    「送信した瞬間にすでに経過していた時間」＋「送信後の経過時間」
+                            const baseMinAtSend =
+                              typeof latest.durationSec === 'number'
+                                ? Math.floor(latest.durationSec / 60)
+                                : 0
+                            const afterSendMin =
+                              diffMinutesFromNow(latest.createdAt, nowMs) ?? 0
+                            minutesToday = baseMinAtSend + afterSendMin
+                          } else {
+                            minutesToday = null
+                          }
 
                           const matchesFilter =
                             problemFilter === 'all' ||
@@ -592,7 +648,8 @@ export default function TeacherPage() {
             <div className="text-[10px] text-gray-500 mt-1">
               ・本日の履歴のみを対象としています（前日以前のデータは座席ビュー／一覧には表示されません）。<br />
               ・問題フィルタ「すべて」のとき：各座席の本日分の問題タイトルと経過時間を表示します。<br />
-              ・特定の問題でフィルタしたとき：その問題に取り組んでいる座席だけを表示し、経過時間で色分けします。
+              ・特定の問題でフィルタしたとき：その問題に取り組んでいる座席だけを表示し、経過時間で色分けします。<br />
+              ・チャット／採点／座席情報は Firestore の変更をリアルタイムで反映します。
             </div>
           </section>
 
@@ -631,21 +688,9 @@ export default function TeacherPage() {
                               座席: {log.seatNumber}
                             </span>
                           )}
-                          {(
-                            (log.questionType ?? 'unknown') as QuestionType
-                          ) && (
+                          {log.questionType && (
                             <span className="px-1.5 py-0.5 rounded border bg-blue-50">
-                              種類: {questionTypeLabel(log.questionType ?? 'unknown')}
-                            </span>
-                          )}
-                          {log.userMode && (
-                            <span className="px-1.5 py-0.5 rounded border bg-gray-50">
-                              質問: {log.userMode === 'grading' ? '採点モード' : '通常モード'}
-                            </span>
-                          )}
-                          {log.answerMode && (
-                            <span className="px-1.5 py-0.5 rounded border bg-gray-50">
-                              回答: {log.answerMode === 'grading' ? '採点モード' : '通常モード'}
+                              種類: {log.questionType}
                             </span>
                           )}
                           <span
@@ -710,10 +755,7 @@ export default function TeacherPage() {
 
               <div className="space-y-2 text-xs">
                 {filteredSubmissions.map((s) => (
-                  <details
-                    key={s.id}
-                    className="border rounded bg-white"
-                  >
+                  <details key={s.id} className="border rounded bg-white">
                     <summary className="px-3 py-2 cursor-pointer flex items-center justify-between gap-3">
                       <div className="flex flex-col gap-1 min-w-0">
                         <div className="flex flex-wrap items-center gap-2">
