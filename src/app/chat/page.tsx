@@ -313,7 +313,7 @@ function renderHighlightedDescription(desc: string) {
         b.type === 'ul' ? (
           <ul key={`ul-${i}`} className="list-disc pl-5 my-1 space-y-0.5">{b.items.map((it, j) => <li key={j}>{highlightInline(it)}</li>)}</ul>
         ) : b.type === 'ol' ? (
-          <ol key={`ol-${i}`} className="list-decimal pl-5 my-1 space-y-0.5">{b.items.map((it, j) => <li key={j}>{highlightInline(it)}</li>)}</ol>
+          <ol key={`ol-${i}`} className="list-decimal pl-5 my-1.space-y-0.5">{b.items.map((it, j) => <li key={j}>{highlightInline(it)}</li>)}</ol>
         ) : (
           <p key={`p-${i}`} className={KW_H.test(b.text) || LINE_L.test(b.text) ? 'py-0.5 pl-2 border-l-4 border-rose-300/70 text-gray-900' : 'py-0.5'}>
             {highlightInline(b.text)}
@@ -322,6 +322,38 @@ function renderHighlightedDescription(desc: string) {
       )}
     </div>
   )
+}
+
+/* ===== 課題文ほぼコピペ検知用ユーティリティ ===== */
+const normalizeForCompare = (text: string): string =>
+  (text || '')
+    .replace(/\s/g, '')                // 空白・改行をすべて削除
+    .replace(/[。、，,.]/g, '')        // 句読点もざっくり削る
+
+function looksLikeProblemCopy(desc: string, input: string): boolean {
+  const a = normalizeForCompare(desc)
+  const b = normalizeForCompare(input)
+
+  // 問題文が短すぎる / 入力が短すぎる場合は判定しない
+  if (a.length < 200) return false
+  if (b.length < 80) return false
+
+  const CHUNK = 60   // 1チャンクの長さ
+  const STEP  = 30   // スライド幅
+
+  let hitLen = 0
+
+  for (let i = 0; i + CHUNK <= a.length; i += STEP) {
+    const chunk = a.slice(i, i + CHUNK)
+    if (b.includes(chunk)) {
+      hitLen += CHUNK
+    }
+  }
+
+  const overlapRatio = hitLen / b.length // 入力全体のうち、何割が課題文と一致しているか
+
+  // 例: 入力の 60%以上が課題文由来なら「ほぼそのまま」とみなす
+  return overlapRatio >= 0.6
 }
 
 /* ===== メッセージ整形 ===== */
@@ -420,6 +452,40 @@ function detectLang(text: string, problem?: Problem): string {
   if (/\bfun\s+\w+\(.*\)\s*{/.test(text) || /\bdata\s+class\b/.test(text)) return 'kotlin'
   if (/\bnamespace\b/.test(text) && /\bclass\b/.test(text) && /\bstring\b/i.test(text)) return 'csharp'
   return 'java'
+}
+
+/* ===== 模範コードから識別子抽出（禁止リスト用） ===== */
+const IDENT_KEYWORDS = new Set<string>([
+  'if', 'else', 'for', 'while', 'do', 'switch', 'case', 'break', 'continue', 'return',
+  'class', 'public', 'private', 'protected', 'static', 'void', 'int', 'double', 'float',
+  'char', 'boolean', 'bool', 'long', 'short', 'byte', 'new', 'this', 'super', 'extends',
+  'implements', 'import', 'package', 'using', 'namespace', 'null', 'true', 'false',
+  'try', 'catch', 'finally', 'throw', 'throws', 'final', 'const', 'var', 'let', 'function',
+  'def', 'from', 'in', 'out', 'override', 'virtual', 'enum', 'struct', 'interface', 'record',
+  'typeof', 'instanceof', 'main', 'args', 'println', 'printf', 'scanf', 'cin', 'cout',
+  'system', 'out', 'print', 'string'
+])
+
+function extractIdentifiersFromSolutionFiles(files: { code: string }[] | undefined): string[] {
+  if (!files || files.length === 0) return []
+  const ids = new Set<string>()
+  const re = /\b[A-Za-z_][A-Za-z0-9_]*\b/g
+
+  for (const f of files) {
+    const code = f.code || ''
+    let m: RegExpExecArray | null
+    while ((m = re.exec(code))) {
+      const id = m[0]
+      const lower = id.toLowerCase()
+      if (IDENT_KEYWORDS.has(lower)) continue
+      if (id.length <= 1) continue
+      if (/^[A-Z_]+$/.test(id)) continue // 定数っぽい全大文字は除外
+      ids.add(id)
+      if (ids.size >= 120) break
+    }
+    if (ids.size >= 120) break
+  }
+  return Array.from(ids)
 }
 
 /* ===== 抽出ユーティリティ（現在は未使用だが将来拡張用に保持） ===== */
@@ -735,6 +801,9 @@ export default function ChatPage() {
   }, [seatNumber, studentId])
 
   // ====== タイマー ======
+
+
+
   const [elapsedSec, setElapsedSec] = useState(0)
   const [nudgeCount, setNudgeCount] = useState(0)
   const pad2 = (n: number) => n.toString().padStart(2, '0')
@@ -1092,6 +1161,19 @@ export default function ChatPage() {
   const sendWithContext = async (userContent: string, qType: QuestionTypeForLog) => {
     if (!userContent.trim() || !problem) return
 
+    // ★ 課題文ほぼそのまま貼り付けチェック（文法・理論・自由記述のみ）
+    if (qType === 'syntax' || qType === 'algo' || qType === 'free') {
+      if (looksLikeProblemCopy(problem.description || '', userContent)) {
+        pushAssistant(
+          '課題文そのもの、あるいは課題文の大部分がそのまま貼り付けられているようです。\n' +
+          'このモードでは「どの部分が分からないか」「自分でどう考えたか」を書いて質問してください。\n' +
+          '・課題文のうち、どの行／どの文が分からないのか\n' +
+          'などを含めて、短く書き直してからもう一度送信してください。'
+        )
+        return
+      }
+    }
+
     // 1. チャット欄＆ログ用のユーザーメッセージはそのまま保存
     const userMessage: Message = {
       role: 'user',
@@ -1143,7 +1225,15 @@ ${userContent}
 ${outputRule(lang)}`
     } else {
       // 🟦 文法・書き方 / 🟨 理論・アルゴリズム / 🟪 自由記述
-      // → 問題文・模範コードは送らず、変数名を変えるルールだけ追加
+      // → 問題文・模範コードは送らず、変数名を変えるルール＋禁止識別子リストを追加
+      const bannedIdList = extractIdentifiersFromSolutionFiles(problem.solution_files || [])
+      const bannedSection = bannedIdList.length
+        ? `\n【禁止識別子リスト（重要）】
+以下の名前は現在の課題の模範コードで使われています。これらと同じ名前を新しく出すコード例に使ってはいけません：
+${bannedIdList.join(', ')}
+`
+        : ''
+
       promptForLLM = String.raw`${BASE_TEACHER_PROMPT(lang)}
 
 【相談モード】
@@ -1162,7 +1252,7 @@ ${userContent}
 - ただし、役割が分からなくならないように、意味が想像しやすい名前（value1, totalCount など）にしてください。
 - 正解コード全体や、そのまま提出すると通ってしまう完成コードは出さないでください。
 - あくまで「考え方」と「部分的なコード例」にとどめてください。
-
+${bannedSection}
 ${outputRule(lang)}`
     }
 
@@ -1523,10 +1613,10 @@ ${filesForPrompt}
             </div>
           </div>
 
-          <div className="flex items-center gap-4 mb-4">
+          <div className="flex items-center gap-4.mb-4">
             <div className="flex items-center gap-2">
               <span className={!gradingMode ? 'font-bold' : 'text-gray-400'}>通常モード</span>
-              <label className="mx-2 relative inline-flex items-center.cursor-pointer">
+              <label className="mx-2 relative inline-flex items-center cursor-pointer">
                 <input
                   type="checkbox"
                   className="sr-only peer"
@@ -1612,7 +1702,7 @@ ${filesForPrompt}
             <div className="mb-3 border rounded p-3 bg-slate-50 space-y-3">
               <div className="text-sm font-semibold">採点モード提出（どちらか選択）</div>
 
-              <div className="flex.items-center gap-6 text-sm">
+              <div className="flex items-center gap-6 text-sm">
                 <label className="flex items-center gap-2">
                   <input
                     type="radio"
@@ -1647,7 +1737,7 @@ ${filesForPrompt}
                       下の「ファイルを選ぶ」からも追加可能。提出前は一覧から<strong>削除</strong>・<strong>追加</strong>ができます。
                     </p>
                     <label
-                      className="cursor-pointer text-xs bg-sky-600 text-white px-3 py-1.5 rounded hover:opacity-90.shadow"
+                      className="cursor-pointer text-xs bg-sky-600 text-white px-3 py-1.5 rounded hover:opacity-90 shadow"
                       title="ファイル選択"
                     >
                       ファイルを選ぶ
@@ -1685,7 +1775,7 @@ ${filesForPrompt}
               {gradingInputMode === 'paste' && (
                 <div className="space-y-2">
                   <div className="border-2 border-dashed rounded-2xl p-4 bg-white/70 hover:bg-white transition-colors">
-                    <div className="flex items-center justify-between.mb-2">
+                    <div className="flex items-center justify-between mb-2">
                       <div className="text-sm font-semibold">ここに<strong>コード全文</strong>を貼り付け（Ctrl+V / ⌘V）</div>
                       <button
                         type="button"
@@ -1741,7 +1831,7 @@ ${filesForPrompt}
           {!gradingMode && (
             <div className="mt-4 space-y-3">
               {/* 質問パターン選択 */}
-              <div className="flex flex-wrap.items-center gap-2 text-xs">
+              <div className="flex flex-wrap items-center gap-2 text-xs">
                 <span className="text-gray-600">質問のパターンから選ぶ：</span>
 
                 <button
@@ -1875,7 +1965,7 @@ ${filesForPrompt}
                                     </button>
                                     <button
                                       type="button"
-                                      className="px-2 py-1 rounded border.hover:bg-gray-50.disabled:opacity-40"
+                                      className="px-2 py-1 rounded border hover:bg-gray-50 disabled:opacity-40"
                                       onClick={() =>
                                         setStepIndex((i) => Math.min(steps.length - 1, i + 1))
                                       }
