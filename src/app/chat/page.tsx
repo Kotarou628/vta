@@ -6,6 +6,7 @@ import React, {
   forwardRef, useImperativeHandle,
 } from 'react'
 import Link from 'next/link'
+import Image from 'next/image'
 
 // Firestore / Auth
 import {
@@ -808,17 +809,17 @@ export default function ChatPage() {
         const snap = await getDoc(ref)
         const existing = snap.exists() ? (snap.data() as any) : null
 
-        const base: any = {}
+        const base: any = {
+          updatedAt: serverTimestamp(),   // ★ 最終更新時刻は毎回更新
+        }
         if (studentId) base.studentId = studentId
         if (seat) base.seatNumber = seat
         if (!snap.exists()) {
           base.createdAt = serverTimestamp()
         }
 
-        // ドキュメント作成 / 更新
         await setDoc(ref, base, { merge: true })
 
-        // 既存の taRequested を state に反映
         if (existing && typeof existing.taRequested === 'boolean') {
           setTaRequested(existing.taRequested)
         }
@@ -828,7 +829,8 @@ export default function ChatPage() {
         console.warn('[students] ensure doc failed:', e)
       }
     })()
-  }, [seatNumber, studentId])
+  }, [seatNumber, studentId, studentDocId])
+
 
 
   // ====== タイマー ======
@@ -868,6 +870,7 @@ export default function ChatPage() {
       seatNumber: seat ?? null,
       currentProblemId: p.id,
       currentProblemTitle: p.title,
+      updatedAt: serverTimestamp(),      // ★ 最終更新時刻
     }
     if (opts.resetTimer) {
       payload.timerStartedAt = serverTimestamp()
@@ -880,10 +883,14 @@ export default function ChatPage() {
     }
   }
 
+
   // ★ TA 呼び出しフラグを更新
   const updateStudentTaRequest = async (requested: boolean) => {
     const docId = studentDocId || studentId || auth.currentUser?.uid || null
-    if (!docId) return
+    if (!docId) {
+      console.warn('[TA] students ドキュメントIDが取れませんでした')
+      return
+    }
 
     const ref = doc(db, 'students', docId)
     try {
@@ -892,20 +899,29 @@ export default function ChatPage() {
         {
           taRequested: requested,
           taRequestedAt: requested ? serverTimestamp() : null,
+          updatedAt: serverTimestamp(),
         },
         { merge: true }
       )
-      // Firestore への書き込みが成功したらローカル状態も更新
-      setTaRequested(requested)
     } catch (e) {
       console.warn('[students] update TA request failed:', e)
     }
   }
 
-  const handleToggleTa = async () => {
-    if (!problem) return  // waitingFeedback は見ない
-    const next = !taRequested
-    await updateStudentTaRequest(next)
+  const handleToggleTa = () => {
+    if (!problem) return
+
+    setTaRequested(prev => {
+      const next = !prev
+      console.log('[TA] ボタンクリック: prev -> next', prev, next)
+
+      // Firestore 更新は非同期で投げる（失敗しても UI は変わる）
+      updateStudentTaRequest(next).catch(e =>
+        console.error('[TA] updateStudentTaRequest error', e)
+      )
+
+      return next
+    })
   }
 
   // 問題切替
@@ -1499,6 +1515,7 @@ ${outputRule(lang)}`
         assistantMessage,
         resolved,
         seatNumber: seat ?? null,
+        studentId: studentId ?? null,                  // ★ 追加
         problemTitle: problem.title,
         problemId: problem.id,
         userId: user?.uid ?? null,
@@ -1747,8 +1764,11 @@ ${filesForPrompt}
               {seatNumber && <span className="text-xs px-2 py-1 rounded border bg-white">座席: {seatNumber}</span>}
               {problem && <span className="text-xs px-2 py-1 rounded border bg-white">⏱ 継続: {fmtHMS(elapsedSec)}</span>}
               {/* 40分以上取り組んでいるときだけ TA 呼び出しボタンを表示 */}
+              {/* TA呼び出しボタン（画像＋テキスト） */}
+              {/* TA呼び出しボタン：常に表示してトグルできるようにする */}
               {problem && elapsedSec >= TA_CALL_THRESHOLD_SEC && (
                 <button
+                  type="button"
                   className={`border px-2 py-1 rounded text-xs ${
                     taRequested
                       ? 'bg-rose-100 text-rose-700 hover:bg-rose-200'
@@ -1756,7 +1776,7 @@ ${filesForPrompt}
                   }`}
                   onClick={handleToggleTa}
                 >
-                  {taRequested ? '👋 TA呼び出し中' : 'TAを呼ぶ'}
+                  {taRequested ? '👋 TA呼び出し中（クリックでキャンセル）' : 'TAを呼ぶ'}
                 </button>
               )}
               <button
