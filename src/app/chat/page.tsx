@@ -196,6 +196,17 @@ const GRADING_PROMPT = String.raw`
 `.trim()
 
 /* ===== テンプレ（ステップUIで利用） ===== */
+const TEMPLATE_TASK = `【課題の読み解き・作業工程の整理】
+１：今取り組んでいる問題のどのあたりで止まっているか
+→
+
+２：自分なりに「何をする課題か」理解していること
+→
+
+３：次に何をすればよいかわからないポイント
+→
+`
+
 const TEMPLATE_ERROR = `【エラー・例外の相談】
 
 １：エラーメッセージ全文（コピペでOK）
@@ -248,7 +259,7 @@ function fillTemplate(template: string, answers: string[]): string {
 }
 
 /* ===== 型 ===== */
-type QuestionMode = 'none' | 'error' | 'syntax' | 'review' | 'algo' | 'free'
+type QuestionMode = 'none' | 'task' | 'error' | 'syntax' | 'review' | 'algo' | 'free'
 type QuestionTypeForLog = Exclude<QuestionMode, 'none'> | 'unknown'
 
 type Message = {
@@ -263,6 +274,8 @@ type Problem = { id: string; title: string; description: string; solution_files:
 /* ===== モード説明文 ===== */
 function describeQuestionMode(q: QuestionTypeForLog): string {
   switch (q) {
+    case 'task':
+      return '課題の読み解きと作業工程の整理です。課題文をどう読むか・作業をどう分解するかだけを説明し、コード例や擬似コードは一切出さないでください。'
     case 'error':
       return 'エラー・例外の相談です。エラーメッセージとコードをもとに、原因と修正方針を説明してください。'
     case 'review':
@@ -695,6 +708,11 @@ export default function ChatPage() {
   const [stepIndex, setStepIndex] = useState(0)
   const stepTextareaRef = useRef<HTMLTextAreaElement | null>(null)
 
+  // 課題の読み解き・進め方（3項目）
+  const [taskWhere, setTaskWhere] = useState('')         // １：どの課題・どこで止まっているか
+  const [taskUnderstand, setTaskUnderstand] = useState('') // ２：自分なりの理解
+  const [taskStuck, setTaskStuck] = useState('')         // ３：どこで詰まっているか
+
   // エラー相談（2項目：テンプレ順に合わせる）
   const [errMessage, setErrMessage] = useState('') // １：エラーメッセージ全文
   const [errCode, setErrCode] = useState('')       // ２：実行したコード（全部）
@@ -730,6 +748,8 @@ export default function ChatPage() {
   const [seatNumber, setSeatNumber] = useState<string | null>(null)
   const [studentId, setStudentId] = useState<string | null>(null)       // ★ 学籍番号
   const [studentDocId, setStudentDocId] = useState<string | null>(null) // ★ students ドキュメントID
+  // TA呼び出し状態（この問題について TA を呼んだか）
+  const [taRequested, setTaRequested] = useState(false)
 
   useEffect(() => {
     setSeatNumber(getSeatNumberFromStorage())
@@ -779,26 +799,37 @@ export default function ChatPage() {
     const seat = normalizeSeatNumber(getSeatNumberFromStorage() ?? seatNumber ?? null)
     if (!seat && !studentId) return
 
-    const docId = studentId || auth.currentUser?.uid || null
+    const docId = studentDocId || studentId || auth.currentUser?.uid || null
     if (!docId) return
 
     const ref = doc(db, 'students', docId)
     ;(async () => {
       try {
         const snap = await getDoc(ref)
+        const existing = snap.exists() ? (snap.data() as any) : null
+
         const base: any = {}
         if (studentId) base.studentId = studentId
         if (seat) base.seatNumber = seat
         if (!snap.exists()) {
           base.createdAt = serverTimestamp()
         }
+
+        // ドキュメント作成 / 更新
         await setDoc(ref, base, { merge: true })
+
+        // 既存の taRequested を state に反映
+        if (existing && typeof existing.taRequested === 'boolean') {
+          setTaRequested(existing.taRequested)
+        }
+
         setStudentDocId(docId)
       } catch (e) {
         console.warn('[students] ensure doc failed:', e)
       }
     })()
   }, [seatNumber, studentId])
+
 
   // ====== タイマー ======
 
@@ -849,6 +880,34 @@ export default function ChatPage() {
     }
   }
 
+  // ★ TA 呼び出しフラグを更新
+  const updateStudentTaRequest = async (requested: boolean) => {
+    const docId = studentDocId || studentId || auth.currentUser?.uid || null
+    if (!docId) return
+
+    const ref = doc(db, 'students', docId)
+    try {
+      await setDoc(
+        ref,
+        {
+          taRequested: requested,
+          taRequestedAt: requested ? serverTimestamp() : null,
+        },
+        { merge: true }
+      )
+      // Firestore への書き込みが成功したらローカル状態も更新
+      setTaRequested(requested)
+    } catch (e) {
+      console.warn('[students] update TA request failed:', e)
+    }
+  }
+
+  const handleToggleTa = async () => {
+    if (!problem) return  // waitingFeedback は見ない
+    const next = !taRequested
+    await updateStudentTaRequest(next)
+  }
+
   // 問題切替
   const handleSelectProblem = (p: Problem) => {
     if (problem) pauseTimer(problem.id)
@@ -856,13 +915,17 @@ export default function ChatPage() {
     resumeTimer(p.id)
     setNudgeCount(0)
     setPendingNudge(null)
+    setTaRequested(false)
     // ★ 新しい問題を選択したタイミングで timerStartedAt をリセット
     updateStudentTimerForProblem(p, { resetTimer: true })
+    // 問題を変えたら TA 呼び出しフラグもクリアしておく
+    updateStudentTaRequest(false)
   }
 
   // 経過秒 & ナッジ
   const NUDGE_FIRST = 20 * 60
   const NUDGE_SECOND = 30 * 60
+  const TA_CALL_THRESHOLD_SEC = 40 * 60
   useEffect(() => {
     if (!problem) return
     const tick = () => {
@@ -939,6 +1002,7 @@ export default function ChatPage() {
 
   const questionTitle = useMemo(() => {
     switch (questionMode) {
+      case 'task': return '課題の読み解き・進め方の相談'
       case 'error': return 'エラー・例外の相談'
       case 'syntax': return '文法・書き方の相談'
       case 'review': return 'コードレビュー・バグの相談'
@@ -981,6 +1045,37 @@ export default function ChatPage() {
 `
 
     switch (questionMode) {
+     case 'task':
+       return [
+         {
+           key: 'task-where',
+           label:
+             '【課題の読み解き・作業工程の整理】\n\n' +
+             '１：今取り組んでいる問題のどのあたりで止まっているか',
+           placeholder: '例）課題3-2の～（問題文の具体的な個所）で止まっています など',
+           value: taskWhere,
+           setValue: setTaskWhere,
+         },
+         {
+           key: 'task-understand',
+           label:
+             '２：自分なりに「何をする課題か」理解していること\n' +
+             '   （分かっていること／分かったと思っていること）',
+           placeholder: '例）入力された数を配列に入れて、合計を求める課題だと思っています など',
+           value: taskUnderstand,
+           setValue: setTaskUnderstand,
+         },
+         {
+           key: 'task-stuck',
+           label:
+             '３：次に何をすればよいか分からないポイント\n' +
+             '   （作業工程のどこが曖昧か・不安か）',
+           placeholder: '例）配列に入れるところまではできたが、その後何をすれば良いか分からない など',
+           value: taskStuck,
+           setValue: setTaskStuck,
+         },
+       ]
+
       case 'error':
         return [
           {
@@ -1074,8 +1169,9 @@ export default function ChatPage() {
       default:
         return []
     }
-  }, [
+  },  [
     questionMode,
+    taskWhere, taskUnderstand, taskStuck,
     errMessage, errCode,
     hintQuestion, hintCode,
     reviewCode, reviewExpected, reviewActual,
@@ -1097,6 +1193,11 @@ export default function ChatPage() {
   // 現在の入力から送信テキストを組み立て
   const currentUserText = useMemo(() => {
     switch (questionMode) {
+      case 'task': {
+        const answers = [taskWhere, taskUnderstand, taskStuck]
+        if (!answers.some(a => a.trim())) return ''
+        return fillTemplate(TEMPLATE_TASK, answers)
+      }
       case 'error': {
         const answers = [errMessage, errCode]
         if (!answers.some(a => a.trim())) return ''
@@ -1121,8 +1222,9 @@ export default function ChatPage() {
       default:
         return ''
     }
-  }, [
+  },  [
     questionMode,
+    taskWhere, taskUnderstand, taskStuck,
     errMessage, errCode,
     hintQuestion, hintCode,
     reviewCode, reviewExpected, reviewActual,
@@ -1135,6 +1237,9 @@ export default function ChatPage() {
   // モードごとの「必須項目が埋まっているか」判定
   const isQuestionValid = useMemo(() => {
     switch (questionMode) {
+      case 'task':
+        // ①どの課題か ＋ ③どこで詰まっているか は必須、②は任意
+        return !!taskWhere.trim() && !!taskStuck.trim()
       case 'error':
         return !!errMessage.trim() && !!errCode.trim()
       case 'syntax':
@@ -1149,20 +1254,21 @@ export default function ChatPage() {
       default:
         return false
     }
-  }, [
+  },  [
     questionMode,
+    taskWhere, taskUnderstand, taskStuck,
     errMessage, errCode,
     hintQuestion, hintCode,
     reviewCode, reviewExpected, reviewActual,
     algoPoint, freeText,
   ])
 
-  /** 送信（通常モードのみ） */
+    /** 送信（通常モードのみ） */
   const sendWithContext = async (userContent: string, qType: QuestionTypeForLog) => {
     if (!userContent.trim() || !problem) return
 
-    // ★ 課題文ほぼそのまま貼り付けチェック（文法・理論・自由記述のみ）
-    if (qType === 'syntax' || qType === 'algo' || qType === 'free') {
+    // ★ 課題文ほぼそのまま貼り付けチェック（文法・理論・自由記述・課題整理のみ）
+    if (qType === 'syntax' || qType === 'algo' || qType === 'free' || qType === 'task') {
       if (looksLikeProblemCopy(problem.description || '', userContent)) {
         pushAssistant(
           '課題文そのもの、あるいは課題文の大部分がそのまま貼り付けられているようです。\n' +
@@ -1223,6 +1329,37 @@ ${summary}
 ${userContent}
 
 ${outputRule(lang)}`
+      } else if (qType === 'task') {
+        // 🟧 課題の読み解き・作業工程の整理（コードは一切出さない）
+        promptForLLM = String.raw`
+  あなたは、プログラミング課題の「読み解き」と「作業工程の整理」を手伝う教員です。
+
+  【重要制約】
+  - 具体的なコード例・疑似コード・数式の形のアルゴリズムは一切書かないでください。
+  - \`\`\` やコードブロック、セミコロン付きの行など、「そのまま写せば動きそうなもの」は出してはいけません。
+  - 代わりに、「課題文のどの部分をどう読むか」「どの順番で手を動かせば良いか」を日本語の文章と箇条書きだけで説明してください。
+
+  【相談モード】
+  ${modeDesc}
+
+  【今回の授業内容（教員メモ）】
+  ${CURRENT_LESSON_DESCRIPTION}
+
+  【今回扱っている問題】
+  ${problem.title}
+  ${problem.description}
+
+  【これまでの履歴要約】
+  ${summary}
+
+  【学生の状況・考え】
+  ${userContent}
+
+  [出力形式]
+  1) 課題のゴールの言い換え（1〜3文）
+  2) 作業工程のステップ（番号付きで3〜7ステップ程度）
+  3) 「今すぐできそうな最初の一歩」を1〜2文で提案
+  `.trim()
     } else {
       // 🟦 文法・書き方 / 🟨 理論・アルゴリズム / 🟪 自由記述
       // → 問題文・模範コードは送らず、変数名を変えるルール＋禁止識別子リストを追加
@@ -1256,7 +1393,7 @@ ${bannedSection}
 ${outputRule(lang)}`
     }
 
-    // 3. 1回の呼び出しでストリーミング表示（抽象化ステップは使わない）
+    // 3. 1回の呼び出しでストリーミング表示
     setLoading(true)
     createStreamingAssistant('')
 
@@ -1277,6 +1414,7 @@ ${outputRule(lang)}`
     }
   }
 
+
   const handleSend = async () => {
     if (!problem || waitingFeedback || loading) return
     if (!isQuestionValid) return
@@ -1289,6 +1427,11 @@ ${outputRule(lang)}`
 
     // 入力リセット
     switch (questionMode) {
+      case 'task':
+        setTaskWhere('')
+        setTaskUnderstand('')
+        setTaskStuck('')
+        break
       case 'error':
         setErrMessage('')
         setErrCode('')
@@ -1603,6 +1746,19 @@ ${filesForPrompt}
             <div className="flex items-center gap-3">
               {seatNumber && <span className="text-xs px-2 py-1 rounded border bg-white">座席: {seatNumber}</span>}
               {problem && <span className="text-xs px-2 py-1 rounded border bg-white">⏱ 継続: {fmtHMS(elapsedSec)}</span>}
+              {/* 40分以上取り組んでいるときだけ TA 呼び出しボタンを表示 */}
+              {problem && elapsedSec >= TA_CALL_THRESHOLD_SEC && (
+                <button
+                  className={`border px-2 py-1 rounded text-xs ${
+                    taRequested
+                      ? 'bg-rose-100 text-rose-700 hover:bg-rose-200'
+                      : 'bg-rose-50 hover:bg-rose-100'
+                  }`}
+                  onClick={handleToggleTa}
+                >
+                  {taRequested ? '👋 TA呼び出し中' : 'TAを呼ぶ'}
+                </button>
+              )}
               <button
                 className={`border px-2 py-1 rounded text-xs ${waitingFeedback ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-50'}`}
                 onClick={handleTimerRestartClick}
@@ -1637,11 +1793,17 @@ ${filesForPrompt}
           <div className="flex-1 space-y-4 overflow-y-auto">
             {messages.map((msg: Message, idx: number) => {
               const bubble = (
-                <div className={`p-3 rounded max-w-[75%] whitespace-pre-wrap break-words ${msg.role === 'user' ? 'bg-blue-100' : 'bg-green-50'}`}>
+                <div
+                  className={`p-3 rounded max-w-[75%] whitespace-pre-wrap break-words ${
+                    msg.role === 'user' ? 'bg-blue-100' : 'bg-green-50'
+                  }`}
+                >
                   {(() => {
                     const parts = (() => {
                       const regex = /```(?:[a-zA-Z0-9#+-]*)?\n([\s\S]*?)```/g
-                      const res: (string | { code: string })[] = []; let last = 0; let m: RegExpExecArray | null
+                      const res: (string | { code: string })[] = []
+                      let last = 0
+                      let m: RegExpExecArray | null
                       while ((m = regex.exec(msg.content))) {
                         if (m.index > last) res.push(msg.content.slice(last, m.index))
                         res.push({ code: prettyCodeAuto(m[1] ?? '') })
@@ -1651,45 +1813,61 @@ ${filesForPrompt}
                       return res
                     })()
                     return parts.map((p, i) =>
-                      typeof p === 'string' ? <p key={i}>{p}</p> :
-                        <pre key={i} className="bg-gray-200 p-2 rounded overflow-x-auto text-sm"><code>{p.code}</code></pre>
+                      typeof p === 'string' ? (
+                        <p key={i}>{p}</p>
+                      ) : (
+                        <pre
+                          key={i}
+                          className="bg-gray-200 p-2 rounded overflow-x-auto text-sm"
+                        >
+                          <code>{p.code}</code>
+                        </pre>
+                      )
                     )
                   })()}
                 </div>
               )
 
-              if (msg.role === 'assistant' && waitingFeedback && (lastAssistantIndex === null || idx >= (lastAssistantIndex ?? 0))) {
-                const { advice, question, codeBlock, rest } = parseAdviceQuestion(msg.content)
+              // ★ 解決確認待ちのアシスタントメッセージだけ、
+              //    「バブル＋アンケート」をまとめて表示するように変更
+              if (
+                msg.role === 'assistant' &&
+                waitingFeedback &&
+                (lastAssistantIndex === null || idx >= (lastAssistantIndex ?? 0))
+              ) {
                 return (
                   <div key={idx} className="space-y-2">
-                    <div className="flex justify-start">
-                      <div className="p-3 rounded max-w-[75%] bg-green-50 whitespace-pre-wrap break-words space-y-2">
-                        {advice && <p className="leading-relaxed">{emphasizeInline(advice)}</p>}
-                        {question && <p className="leading-relaxed font-semibold">{emphasizeInline(question)}</p>}
-                        {codeBlock && (
-                          <div>
-                            {formatMessageContent(codeBlock).map((part, i) =>
-                              typeof part === 'string' ? <p key={i}>{part}</p> :
-                                <pre key={i} className="bg-gray-200 p-2 rounded overflow-x-auto text-sm"><code>{part.code}</code></pre>
-                            )}
-                          </div>
-                        )}
-                        {rest && <p>{rest}</p>}
-                      </div>
-                    </div>
+                    {/* 回答全文（つぶさない） */}
+                    <div className="flex justify-start">{bubble}</div>
+
+                    {/* 解決できたかアンケート */}
                     <div className="flex justify-start">
                       <div className="bg-amber-50 border border-amber-200 text-amber-900 rounded px-3 py-2 text-sm flex items-center gap-2">
                         <span>この回答で問題は解決できましたか？</span>
-                        <button className="px-2 py-1 rounded bg-emerald-600 text-white hover:opacity-90" onClick={() => answerFeedback(true)}>はい</button>
-                        <button className="px-2 py-1 rounded bg-rose-600 text-white hover:opacity-90" onClick={() => answerFeedback(false)}>いいえ</button>
+                        <button
+                          className="px-2 py-1 rounded bg-emerald-600 text-white hover:opacity-90"
+                          onClick={() => answerFeedback(true)}
+                        >
+                          はい
+                        </button>
+                        <button
+                          className="px-2 py-1 rounded bg-rose-600 text-white hover:opacity-90"
+                          onClick={() => answerFeedback(false)}
+                        >
+                          いいえ
+                        </button>
                       </div>
                     </div>
                   </div>
                 )
               }
 
+              // 通常表示
               return (
-                <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                <div
+                  key={idx}
+                  className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                >
                   {bubble}
                 </div>
               )
@@ -1831,44 +2009,87 @@ ${filesForPrompt}
           {!gradingMode && (
             <div className="mt-4 space-y-3">
               {/* 質問パターン選択 */}
-              <div className="flex flex-wrap items-center gap-2 text-xs">
+              <div className="flex flex-wrap.items-center gap-2 text-xs">
                 <span className="text-gray-600">質問のパターンから選ぶ：</span>
 
+                {/* 🟧 課題の読み解き／作業工程の整理 */}
                 <button
                   type="button"
-                  className={`px-2 py-1 rounded border ${questionMode === 'error' ? 'bg-red-200' : 'bg-red-50 hover:bg-red-100'}`}
+                  className={`px-2 py-1 rounded border ${
+                    questionMode === 'task'
+                      ? 'bg-orange-200'
+                      : 'bg-orange-50 hover:bg-orange-100'
+                  }`}
+                  onClick={() => setQuestionMode('task')}
+                  disabled={!problem || waitingFeedback || loading}
+                >
+                  🟧 課題の読み解き・進め方
+                </button>
+
+                {/* 🟦 書き方 */}
+                <button
+                  type="button"
+                  className={`px-2 py-1 rounded border ${
+                    questionMode === 'syntax'
+                      ? 'bg-blue-200'
+                      : 'bg-blue-50 hover:bg-blue-100'
+                  }`}
+                  onClick={() => setQuestionMode('syntax')}
+                  disabled={!problem || waitingFeedback || loading}
+                >
+                  🟦 書き方の相談
+                </button>
+
+                {/* 🟥 エラー */}
+                <button
+                  type="button"
+                  className={`px-2 py-1 rounded border ${
+                    questionMode === 'error'
+                      ? 'bg-red-200'
+                      : 'bg-red-50 hover:bg-red-100'
+                  }`}
                   onClick={() => setQuestionMode('error')}
                   disabled={!problem || waitingFeedback || loading}
                 >
                   🟥 エラー・例外の相談
                 </button>
+
+                {/* 🟩 コードレビュー */}
                 <button
                   type="button"
-                  className={`px-2 py-1 rounded border ${questionMode === 'syntax' ? 'bg-blue-200' : 'bg-blue-50 hover:bg-blue-100'}`}
-                  onClick={() => setQuestionMode('syntax')}
-                  disabled={!problem || waitingFeedback || loading}
-                >
-                  🟦 文法・書き方の相談
-                </button>
-                <button
-                  type="button"
-                  className={`px-2 py-1 rounded border ${questionMode === 'review' ? 'bg-green-200' : 'bg-green-50 hover:bg-green-100'}`}
+                  className={`px-2 py-1 rounded border ${
+                    questionMode === 'review'
+                      ? 'bg-green-200'
+                      : 'bg-green-50 hover:bg-green-100'
+                  }`}
                   onClick={() => setQuestionMode('review')}
                   disabled={!problem || waitingFeedback || loading}
                 >
                   🟩 コードレビュー・バグの相談
                 </button>
+
+                {/* 🟨 アルゴリズム */}
                 <button
                   type="button"
-                  className={`px-2 py-1 rounded border ${questionMode === 'algo' ? 'bg-yellow-200' : 'bg-yellow-50 hover:bg-yellow-100'}`}
+                  className={`px-2 py-1 rounded border ${
+                    questionMode === 'algo'
+                      ? 'bg-yellow-200'
+                      : 'bg-yellow-50 hover:bg-yellow-100'
+                  }`}
                   onClick={() => setQuestionMode('algo')}
                   disabled={!problem || waitingFeedback || loading}
                 >
-                  🟨 理論・アルゴリズムの相談
+                  🟨 アルゴリズム・理論の相談
                 </button>
+
+                {/* 🟪 自由記述 */}
                 <button
                   type="button"
-                  className={`px-2 py-1 rounded border ${questionMode === 'free' ? 'bg-purple-200' : 'bg-purple-50 hover:bg-purple-100'}`}
+                  className={`px-2 py-1 rounded border ${
+                    questionMode === 'free'
+                      ? 'bg-purple-200'
+                      : 'bg-purple-50 hover:bg-purple-100'
+                  }`}
                   onClick={() => setQuestionMode('free')}
                   disabled={!problem || waitingFeedback || loading}
                 >

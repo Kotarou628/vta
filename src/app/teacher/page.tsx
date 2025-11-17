@@ -53,6 +53,8 @@ type StudentSeat = {
   currentProblemId?: string | null
   currentProblemTitle?: string | null
   startedAt?: Timestamp | null
+  taRequested?: boolean
+  taRequestedAt?: Timestamp | null
 }
 
 const formatDateTime = (ts: Timestamp | null | undefined) => {
@@ -297,6 +299,8 @@ export default function TeacherPage() {
             currentProblemId: d.currentProblemId ?? null,
             currentProblemTitle: d.currentProblemTitle ?? null,
             startedAt: d.startedAt ?? null,
+            taRequested: !!d.taRequested,
+            taRequestedAt: d.taRequestedAt ?? null,
           })
         })
         setStudents(list)
@@ -537,6 +541,10 @@ export default function TeacherPage() {
                   <span className="inline-block w-3 h-3 border bg-red-200" />
                   <span>30分以上</span>
                 </span>
+                <span className="flex items-center gap-1">
+                  <span className="inline-block w-3 h-3 border bg-rose-200" />
+                  <span>👋TA呼び出し中</span>
+                </span>
               </div>
             </div>
 
@@ -573,23 +581,13 @@ export default function TeacherPage() {
                             seatInfo?.currentProblemTitle ?? latest?.title ?? ''
 
                           // 経過時間（分）の計算
-                          // 1) students.startedAt が今日にある場合：着席〜現在の経過時間をそのまま使う
                           let minutesToday: number | null = null
 
-                          if (
-                            seatInfo?.startedAt &&
-                            isSameDay(seatInfo.startedAt, nowMs)
-                          ) {
-                            minutesToday = diffMinutesFromNow(
-                              seatInfo.startedAt,
-                              nowMs
-                            )
-                          } else if (
-                            latest?.createdAt &&
-                            isSameDay(latest.createdAt, nowMs)
-                          ) {
-                            // 2) startedAt が無い場合
-                            //    「送信した瞬間にすでに経過していた時間」＋「送信後の経過時間」
+                          if (seatInfo?.startedAt && isSameDay(seatInfo.startedAt, nowMs)) {
+                            minutesToday = diffMinutesFromNow(seatInfo.startedAt, nowMs)
+                          } else if (latest?.createdAt && isSameDay(latest.createdAt, nowMs)) {
+                            // startedAt が無い場合：
+                            // 「送信した瞬間にすでに経過していた時間」＋「送信後の経過時間」
                             const baseMinAtSend =
                               typeof latest.durationSec === 'number'
                                 ? Math.floor(latest.durationSec / 60)
@@ -605,7 +603,8 @@ export default function TeacherPage() {
                             problemFilter === 'all' ||
                             (problemId && problemId === problemFilter)
 
-                          const bgClass =
+                          // 経過時間に応じた背景色（あとで TA 呼び出し中なら上書き）
+                          let bgClass =
                             matchesFilter && minutesToday != null
                               ? seatBgClassByMinutes(minutesToday)
                               : 'bg-white'
@@ -616,11 +615,20 @@ export default function TeacherPage() {
                               ? `${minutesToday}分経過`
                               : ''
 
+                          // TA呼び出し中の表示文言
+                          let taLine = seatInfo?.taRequested ? '👋TA呼び出し中' : ''
+
                           // フィルタで特定の問題を選んだときは、
                           // その問題以外の座席は空表示にする
                           if (problemFilter !== 'all' && !matchesFilter) {
                             mainLine = ''
                             subLine = ''
+                            taLine = ''
+                          }
+
+                          // TA呼び出し中なら背景色を上書きして強調
+                          if (seatInfo?.taRequested) {
+                            bgClass = 'bg-rose-200 border-rose-500'
                           }
 
                           return (
@@ -628,13 +636,21 @@ export default function TeacherPage() {
                               key={seatId}
                               className={`flex flex-col items-center justify-center h-14 border ${bgClass}`}
                             >
-                              <div className="text-[11px] font-semibold">{seatId}</div>
+                              <div className="text-[11px] font-semibold flex items-center gap-1">
+                                <span>{seatId}</span>
+                                {seatInfo?.taRequested && <span>👋</span>}
+                              </div>
                               <div className="text-[10px] text-center px-1 truncate w-full">
                                 {mainLine || ''}
                               </div>
                               <div className="text-[10px] text-center text-gray-700">
                                 {subLine}
                               </div>
+                              {taLine && (
+                                <div className="text-[10px] text-center text-rose-700 font-semibold">
+                                  {taLine}
+                                </div>
+                              )}
                             </div>
                           )
                         })
