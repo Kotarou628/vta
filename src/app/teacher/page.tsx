@@ -52,9 +52,17 @@ type StudentSeat = {
   seatNumber: string
   currentProblemId?: string | null
   currentProblemTitle?: string | null
+  // 問題を選択した瞬間の時刻（タイマー開始）
+  timerStartedAt?: Timestamp | null
+  // 将来 startedAt に移行しても動くように一応残しておく
   startedAt?: Timestamp | null
   taRequested?: boolean
   taRequestedAt?: Timestamp | null
+
+  // タイマー系（chat 画面と同じ設計）
+  timerBaseSec?: number
+  timerResumedAt?: Timestamp | null
+  timerRunning?: boolean
 }
 
 const formatDateTime = (ts: Timestamp | null | undefined) => {
@@ -87,7 +95,7 @@ const isSameDay = (ts: Timestamp | null | undefined, nowMs: number) => {
   )
 }
 
-// 経過時間（分）を計算
+// 経過時間（分）の fallback 計算
 const diffMinutesFromNow = (
   startedAt: Timestamp | null | undefined,
   nowMs: number
@@ -298,9 +306,15 @@ export default function TeacherPage() {
             seatNumber: (d.seatNumber as string).toUpperCase(),
             currentProblemId: d.currentProblemId ?? null,
             currentProblemTitle: d.currentProblemTitle ?? null,
+            // timerStartedAt があれば優先。将来 startedAt に移行しても動くようフォールバックも持つ
+            timerStartedAt: d.timerStartedAt ?? d.startedAt ?? null,
             startedAt: d.startedAt ?? null,
             taRequested: !!d.taRequested,
             taRequestedAt: d.taRequestedAt ?? null,
+            timerBaseSec:
+              typeof d.timerBaseSec === 'number' ? d.timerBaseSec : 0,
+            timerResumedAt: d.timerResumedAt ?? null,
+            timerRunning: !!d.timerRunning,
           })
         })
         setStudents(list)
@@ -350,8 +364,8 @@ export default function TeacherPage() {
     return m
   }, [students])
 
-  // seatNumber → 「本日分の最新チャットの問題ID/タイトル/送信時刻/送信時点の経過秒」のマップ
-  const seatLatestProblemMap = useMemo(() => {
+  // seatNumber → 「本日分の最新チャット（問題問わず）」のマップ
+  const seatLatestAnyProblemMap = useMemo(() => {
     const m = new Map<
       string,
       {
@@ -362,12 +376,45 @@ export default function TeacherPage() {
       }
     >()
 
-    // chatLogs は createdAt desc で取得しているので、最初に見つけたものが本日分の最新
+    // chatLogs は createdAt desc で取得しているので、最初に見つけたものが「その座席で本日最後の質問」
     chatLogs.forEach((log) => {
       if (!log.seatNumber || !log.problemId) return
       if (!isSameDay(log.createdAt, nowMs)) return
 
       const key = log.seatNumber.toUpperCase()
+      if (!m.has(key)) {
+        m.set(key, {
+          problemId: log.problemId,
+          title: log.problemTitle ?? '',
+          createdAt: log.createdAt ?? null,
+          durationSec:
+            typeof log.durationSec === 'number' ? log.durationSec : undefined,
+        })
+      }
+    })
+
+    return m
+  }, [chatLogs, nowMs])
+
+  // seatNumber + problemId → 「その問題の本日分の最新チャット」のマップ
+  const seatProblemLatestMap = useMemo(() => {
+    const m = new Map<
+      string,
+      {
+        problemId: string
+        title: string
+        createdAt: Timestamp | null
+        durationSec?: number
+      }
+    >()
+
+    // 同じく createdAt desc 前提で「最初に見つけた seat×problem の組」を採用
+    chatLogs.forEach((log) => {
+      if (!log.seatNumber || !log.problemId) return
+      if (!isSameDay(log.createdAt, nowMs)) return
+
+      const seatId = log.seatNumber.toUpperCase()
+      const key = `${seatId}__${log.problemId}`
       if (!m.has(key)) {
         m.set(key, {
           problemId: log.problemId,
@@ -572,31 +619,88 @@ export default function TeacherPage() {
                           const seatId = `${col}${row}` // 例: A01
 
                           const seatInfo = studentSeatMap.get(seatId)
-                          const latest = seatLatestProblemMap.get(seatId)
+                          const latestAny = seatLatestAnyProblemMap.get(seatId)
+
+                          // 現在その座席で選択されている問題ID
+                          const currentProblemId =
+                            seatInfo?.currentProblemId ??
+                            latestAny?.problemId ??
+                            null
+
+                          // 「現在の問題」に対応する最新チャット（本日分）
+                          const latestForCurrent =
+                            currentProblemId != null
+                              ? seatProblemLatestMap.get(
+                                  `${seatId}__${currentProblemId}`
+                                )
+                              : undefined
 
                           // 表示用の問題ID/タイトル（本日分）
-                          const problemId =
-                            seatInfo?.currentProblemId ?? latest?.problemId ?? null
+                          const problemId = currentProblemId
                           const title =
-                            seatInfo?.currentProblemTitle ?? latest?.title ?? ''
+                            seatInfo?.currentProblemTitle ??
+                            latestForCurrent?.title ??
+                            latestAny?.title ??
+                            ''
 
-                          // 経過時間（分）の計算
+                          // ---- 経過時間（分）の計算 ----
                           let minutesToday: number | null = null
 
-                          if (seatInfo?.startedAt && isSameDay(seatInfo.startedAt, nowMs)) {
-                            minutesToday = diffMinutesFromNow(seatInfo.startedAt, nowMs)
-                          } else if (latest?.createdAt && isSameDay(latest.createdAt, nowMs)) {
-                            // startedAt が無い場合：
-                            // 「送信した瞬間にすでに経過していた時間」＋「送信後の経過時間」
-                            const baseMinAtSend =
-                              typeof latest.durationSec === 'number'
-                                ? Math.floor(latest.durationSec / 60)
-                                : 0
-                            const afterSendMin =
-                              diffMinutesFromNow(latest.createdAt, nowMs) ?? 0
-                            minutesToday = baseMinAtSend + afterSendMin
-                          } else {
-                            minutesToday = null
+                          // タイマー開始時刻（存在すれば）：当日判定などに使う
+                          const startedTs =
+                            seatInfo?.timerStartedAt ?? seatInfo?.startedAt ?? null
+
+                          // ① timerBaseSec + timerResumedAt/timerRunning からの「現在の経過秒」
+                          let elapsedSecByTimer: number | null = null
+                          const baseSec =
+                            typeof seatInfo?.timerBaseSec === 'number'
+                              ? seatInfo.timerBaseSec
+                              : 0
+
+                          if (baseSec > 0 || seatInfo?.timerRunning) {
+                            let sec = baseSec
+                            if (seatInfo?.timerRunning && seatInfo.timerResumedAt) {
+                              const resumedMs =
+                                seatInfo.timerResumedAt.toDate().getTime()
+                              const diffSec = Math.max(
+                                0,
+                                Math.floor((nowMs - resumedMs) / 1000)
+                              )
+                              sec += diffSec
+                            }
+                            elapsedSecByTimer = sec
+                          }
+
+                          // 「今日のもの」かどうか（開始時刻か再開時刻で判定）
+                          const isTodayByTimer =
+                            (startedTs && isSameDay(startedTs, nowMs)) ||
+                            (seatInfo?.timerResumedAt &&
+                              isSameDay(seatInfo.timerResumedAt, nowMs)) ||
+                            // 開始情報が無い古いデータの場合は、とりあえず今日扱いにする
+                            (!startedTs && !seatInfo?.timerResumedAt)
+
+                          if (elapsedSecByTimer != null && isTodayByTimer) {
+                            minutesToday = Math.floor(elapsedSecByTimer / 60)
+                          }
+
+                          // ② 「その問題」の最新質問の durationSec（累積時間）を fallback として利用
+                          if (minutesToday == null) {
+                            if (
+                              latestForCurrent?.createdAt &&
+                              isSameDay(latestForCurrent.createdAt, nowMs) &&
+                              typeof latestForCurrent.durationSec === 'number'
+                            ) {
+                              minutesToday = Math.floor(
+                                latestForCurrent.durationSec / 60
+                              )
+                            }
+                          }
+
+                          // ③ さらにダメなら startedAt からの単純経過を fallback
+                          if (minutesToday == null && startedTs) {
+                            if (isSameDay(startedTs, nowMs)) {
+                              minutesToday = diffMinutesFromNow(startedTs, nowMs)
+                            }
                           }
 
                           const matchesFilter =
@@ -616,7 +720,7 @@ export default function TeacherPage() {
                               : ''
 
                           // TA呼び出し中の表示文言
-                          let taLine = seatInfo?.taRequested ? '👋TA呼び出し中' : ''
+                          let taLine = seatInfo?.taRequested ? 'TA呼び出し中' : ''
 
                           // フィルタで特定の問題を選んだときは、
                           // その問題以外の座席は空表示にする
@@ -636,16 +740,23 @@ export default function TeacherPage() {
                               key={seatId}
                               className={`flex flex-col items-center justify-center h-14 border ${bgClass}`}
                             >
+                              {/* 座席番号 + 呼び出しマーク */}
                               <div className="text-[11px] font-semibold flex items-center gap-1">
                                 <span>{seatId}</span>
                                 {seatInfo?.taRequested && <span>👋</span>}
                               </div>
+
+                              {/* 問題タイトル */}
                               <div className="text-[10px] text-center px-1 truncate w-full">
                                 {mainLine || ''}
                               </div>
+
+                              {/* 経過時間 */}
                               <div className="text-[10px] text-center text-gray-700">
                                 {subLine}
                               </div>
+
+                              {/* TA呼び出し状態のテキスト */}
                               {taLine && (
                                 <div className="text-[10px] text-center text-rose-700 font-semibold">
                                   {taLine}

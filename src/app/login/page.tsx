@@ -3,8 +3,14 @@
 
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
-import { db } from '@/lib/firebase';
-import { doc, setDoc, getDoc, serverTimestamp } from 'firebase/firestore';
+import { db, auth } from '@/lib/firebase';
+import {
+  doc,
+  setDoc,
+  getDoc,
+  serverTimestamp,
+} from 'firebase/firestore';
+import { signInAnonymously } from 'firebase/auth';
 
 /** 全角→半角・前後空白除去・英字大文字化 */
 const normalizeSeat = (raw: string) =>
@@ -37,9 +43,12 @@ async function saveSeatLocal(seat: string, studentId: string) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ seat, studentId }),
     });
-  } catch {}
+  } catch (e) {
+    console.warn('[login] saveSeatLocal failed:', e);
+  }
 }
 
+/** students コレクションを upsert */
 async function upsertStudent(studentId: string, seat: string) {
   const ref = doc(db, 'students', studentId);
   const snap = await getDoc(ref);
@@ -47,7 +56,10 @@ async function upsertStudent(studentId: string, seat: string) {
   if (snap.exists()) {
     await setDoc(
       ref,
-      { seatNumber: seat, updatedAt: serverTimestamp() },
+      {
+        seatNumber: seat,
+        updatedAt: serverTimestamp(),
+      },
       { merge: true }
     );
   } else {
@@ -55,6 +67,7 @@ async function upsertStudent(studentId: string, seat: string) {
       studentId,
       seatNumber: seat,
       createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
     });
   }
 }
@@ -86,17 +99,49 @@ export default function LoginPage() {
     }
 
     try {
-      // Firestore の students に upsert
+      console.group('[LOGIN] handleLogin');
+      console.log('[LOGIN] input studentId =', sid);
+      console.log('[LOGIN] input seat      =', seat, '→', seatNormalized);
+
+      // 1) 匿名ログイン（既にログイン済みなら同じ user が返る）
+      const cred = await signInAnonymously(auth);
+      const user = cred.user;
+      console.log('[LOGIN] signed in anonymously. uid =', user.uid);
+
+      // 2) users/{uid} に学籍・座席を紐づけ（ChatPage の onAuthStateChanged 用）
+      const userRef = doc(db, 'users', user.uid);
+      await setDoc(
+        userRef,
+        {
+          studentId: sid,
+          seatNumber: seatNormalized,
+          role: 'student',
+          updatedAt: serverTimestamp(),
+          createdAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
+      console.log('[LOGIN] users doc upserted');
+
+      // 3) students/{studentId} にも upsert（先生側ダッシュボード用）
       await upsertStudent(sid, seatNormalized);
+      console.log('[LOGIN] students doc upserted');
 
-      // ローカル保存
+      // 4) localStorage / sessionStorage に保存（既存チャット互換）
       await saveSeatLocal(seatNormalized, sid);
+      console.log('[LOGIN] localStorage/sessionStorage 保存完了');
 
-      // チャットへ
+      console.groupEnd();
+
+      // 5) チャット画面へ
       router.push('/chat');
-    } catch (err) {
-      console.error(err);
-      setError('ログイン処理でエラーが発生しました。');
+    } catch (err: any) {
+      console.error('[LOGIN] error:', err);
+      if (err?.code === 'auth/operation-not-allowed') {
+        setError('Firebase 側で匿名ログインが無効になっています。コンソールの Authentication 設定を確認してください。');
+      } else {
+        setError('ログイン処理でエラーが発生しました。');
+      }
     } finally {
       setLoading(false);
     }

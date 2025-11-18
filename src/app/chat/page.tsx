@@ -76,9 +76,24 @@ function pauseTimer(id: string) {
     writeTimer(id, { accum: accum + (now - runningAt), runningAt: null })
   }
 }
+
+function getLocalElapsedSec(problemId: string): { sec: number; running: boolean } {
+  const { accum, runningAt } = readTimer(problemId)
+  const now = Date.now()
+  const ms = accum + (runningAt ? (now - runningAt) : 0)
+  return {
+    sec: Math.max(0, Math.floor(ms / 1000)),
+    running: runningAt != null,
+  }
+}
+
 function resumeTimer(id: string) {
   const { runningAt } = readTimer(id)
   if (runningAt == null) writeTimer(id, { runningAt: Date.now() })
+}
+
+type UpdateTimerOpts = {
+  resetTimer?: boolean
 }
 
 /* ================== 入力欄ユーティリティ ================== */
@@ -194,6 +209,24 @@ const GRADING_PROMPT = String.raw`
 [禁止]
 - エラーメッセージの解説
 - 模範コード全文貼付
+`.trim()
+
+const FREE_TEXT_PROMPT = String.raw`
+あなたは、プログラミング演習の受講生と雑談や相談にのるメンターです。
+
+【想定される内容】
+- 「こんにちは」「最近どうですか？」のようなあいさつ
+- 授業や課題への不安、勉強の進め方の相談など
+
+【絶対に守るルール】
+- コードや疑似コード、数式のような「プログラムとして使えそうなもの」は一切書かない。
+- \`\`\` で囲んだコードブロックや、クラス名・メソッド名・変数名の例も出さない。
+- Markdown の箇条書き（「- 」「1. 」など）も使わず、普通の文章だけで答える。
+
+【出力形式】
+- 日本語で 3〜5 文程度にまとめる。
+- 1 行に 1 文を目安とし、**最大 5 行以内**に収める。
+- 学生の気持ちを受け止めつつ、「次にどうすると良さそうか」を軽く提案する。
 `.trim()
 
 /* ===== テンプレ（ステップUIで利用） ===== */
@@ -602,6 +635,12 @@ function getBestCodeBlock(md: string, preferLang?: string | null): { lang: strin
   return best
 }
 
+function guessStudentIdFromEmail(email?: string | null): string | null {
+  if (!email) return null
+  const m = email.match(/\d{7,}/)   // メール中の 7桁以上の数字を学籍番号候補として抽出
+  return m ? m[0] : null
+}
+
 /* ================== Chat API ストリーム読取り ================== */
 async function streamChat(
   message: string,
@@ -761,9 +800,12 @@ export default function ChatPage() {
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (user) => {
-      if (!user) return
+      if (!user) {
+        console.warn('[AUTH] user が null です');
+        return;
+      }
       try {
-        // ログイン時にタイマー全リセット
+        // タイマー全リセット（元の処理そのまま）
         Object.keys(localStorage).forEach((k) => {
           if (k.startsWith('selAccum:') || k.startsWith('selStart:')) localStorage.removeItem(k)
         })
@@ -773,20 +815,34 @@ export default function ChatPage() {
         const snap = await getDoc(ref)
         const data = snap.exists() ? (snap.data() as any) : null
 
+        console.group('[AUTH] onAuthStateChanged');
+        console.log('user.uid =', user.uid);
+        console.log('user.email =', user.email);
+        console.log('users doc exists? =', snap.exists());
+        console.log('users data =', data);
+
         const fsSeat = normalizeSeatNumber(data?.seatNumber ?? null)
+        console.log('fsSeat(from users.seatNumber) =', fsSeat);
+
         if (fsSeat && !getSeatNumberFromStorage()) {
           localStorage.setItem('seatNumber', fsSeat)
           setSeatNumber(fsSeat)
+          console.log('=> seatNumber を localStorage / state に保存しました');
         }
 
-        // ★ 学籍番号を users ドキュメント or メールから推定
+        // ★ 学籍番号を users ドキュメント or メール から取得
         let sid: string | null = null
         if (data?.studentId) {
           sid = String(data.studentId)
-        } else if (user.email) {
-          const m = user.email.match(/\d{7,}/) // 7桁以上の数字を学籍番号候補として抽出
-          if (m) sid = m[0]
+          console.log('studentId from users.doc =', sid);
+        } else {
+          sid = guessStudentIdFromEmail(user.email)
+          console.log('studentId guessed from email =', sid);
         }
+
+        console.log('[AUTH] resolved studentId =', sid);
+        console.groupEnd();
+
         setStudentId(sid || null)
       } catch (e) {
         console.warn('[seatNumber/studentId] fetch failed:', e)
@@ -795,29 +851,44 @@ export default function ChatPage() {
     return () => unsub()
   }, [])
 
+
   // ★ seatNumber / studentId から students ドキュメントを用意
   useEffect(() => {
+    console.group('[STUDENTS EFFECT]');
     const seat = normalizeSeatNumber(getSeatNumberFromStorage() ?? seatNumber ?? null)
-    if (!seat && !studentId) return
+    const docId = resolveStudentDocId()
+    console.log('seat(from storage/state) =', seat);
+    console.log('docId(from resolveStudentDocId) =', docId);
 
-    const docId = studentDocId || studentId || auth.currentUser?.uid || null
-    if (!docId) return
+    if (!docId && !seat) {
+      console.log('=> docId も seat も無いので何もしません');
+      console.groupEnd();
+      return;
+    }
+    if (!docId) {
+      console.log('=> seat はあるが docId が無いので何もしません');
+      console.groupEnd();
+      return;
+    }
 
     const ref = doc(db, 'students', docId)
     ;(async () => {
       try {
         const snap = await getDoc(ref)
         const existing = snap.exists() ? (snap.data() as any) : null
+        console.log('students doc exists? =', snap.exists());
+        console.log('existing data =', existing);
 
         const base: any = {
-          updatedAt: serverTimestamp(),   // ★ 最終更新時刻は毎回更新
+          updatedAt: serverTimestamp(),
+          studentId: docId,
         }
-        if (studentId) base.studentId = studentId
         if (seat) base.seatNumber = seat
         if (!snap.exists()) {
           base.createdAt = serverTimestamp()
         }
 
+        console.log('setDoc payload =', base);
         await setDoc(ref, base, { merge: true })
 
         if (existing && typeof existing.taRequested === 'boolean') {
@@ -825,11 +896,18 @@ export default function ChatPage() {
         }
 
         setStudentDocId(docId)
+        // ★ 念のためここでも state にセット
+        if (!studentId) {
+          console.log('studentId state が空だったので docId を代入します');
+          setStudentId(docId);
+        }
       } catch (e) {
         console.warn('[students] ensure doc failed:', e)
+      } finally {
+        console.groupEnd();
       }
     })()
-  }, [seatNumber, studentId, studentDocId])
+  }, [seatNumber, studentId])
 
 
 
@@ -839,6 +917,7 @@ export default function ChatPage() {
 
   const [elapsedSec, setElapsedSec] = useState(0)
   const [nudgeCount, setNudgeCount] = useState(0)
+  const lastTimerSyncRef = useRef<number>(0)
   const pad2 = (n: number) => n.toString().padStart(2, '0')
   const fmtHMS = (sec: number) => {
     const h = Math.floor(sec / 3600)
@@ -856,39 +935,72 @@ export default function ChatPage() {
   useEffect(() => {
     localStorage.setItem('chatMessages', JSON.stringify(allMessages))
   }, [allMessages])
+  useEffect(() => {
+    lastTimerSyncRef.current = 0
+  }, [problem?.id])
 
   // ★ students コレクションの timer / problem 情報を更新
-  const updateStudentTimerForProblem = async (p: Problem, opts: { resetTimer?: boolean } = {}) => {
-    const docId = studentDocId || studentId || auth.currentUser?.uid || null
-    if (!docId) return
+  const updateStudentTimerForProblem = async (p: Problem, opts: UpdateTimerOpts = {}) => {
+    const docId = resolveStudentDocId()
+    console.group('[STUDENTS] updateStudentTimerForProblem');
+    console.log('problemId =', p.id, 'title =', p.title);
+    console.log('resolved docId =', docId);
+    if (!docId) {
+      console.warn('docId が無いので timer 情報を保存しません');
+      console.groupEnd();
+      return
+    }
 
     const seat = normalizeSeatNumber(getSeatNumberFromStorage() ?? seatNumber ?? null)
     const ref = doc(db, 'students', docId)
 
+    // ★ ローカルタイマーから「累積秒数」と「動作中かどうか」を取得
+    const { sec: elapsedSec, running } = getLocalElapsedSec(p.id)
+
     const payload: any = {
-      studentId: studentId ?? null,
+      studentId: docId,
       seatNumber: seat ?? null,
       currentProblemId: p.id,
       currentProblemTitle: p.title,
-      updatedAt: serverTimestamp(),      // ★ 最終更新時刻
-    }
-    if (opts.resetTimer) {
-      payload.timerStartedAt = serverTimestamp()
+      updatedAt: serverTimestamp(),
+
+      // ▼ 座席マップ用：ローカルタイマーの状態
+      timerBaseSec: elapsedSec,   // ここまでの累積秒
+      timerRunning: running,      // いま動いているかどうか
+
+      currentElapsedSec: elapsedSec,
     }
 
+    // 動作中のときだけ「再開時刻（サーバー時刻）」を記録
+    if (running) {
+      payload.timerResumedAt = serverTimestamp()
+    } else {
+      payload.timerResumedAt = null
+    }
+
+    console.log('payload =', payload);
     try {
       await setDoc(ref, payload, { merge: true })
     } catch (e) {
       console.warn('[students] update timer failed:', e)
+    } finally {
+      console.groupEnd();
     }
   }
 
 
   // ★ TA 呼び出しフラグを更新
   const updateStudentTaRequest = async (requested: boolean) => {
-    const docId = studentDocId || studentId || auth.currentUser?.uid || null
+    const docId = resolveStudentDocId()
+    console.group('[TA] updateStudentTaRequest');
+    console.log('requested =', requested);
+    console.log('resolved docId =', docId);
+    console.log('studentId state =', studentId, 'studentDocId state =', studentDocId);
+    console.log('auth.currentUser?.email =', auth.currentUser?.email ?? null);
+
     if (!docId) {
-      console.warn('[TA] students ドキュメントIDが取れませんでした')
+      console.warn('[TA] studentId が取得されていませんでした')
+      console.groupEnd();
       return
     }
 
@@ -903,8 +1015,11 @@ export default function ChatPage() {
         },
         { merge: true }
       )
+      console.log('=> TA フラグを書き込みました');
     } catch (e) {
       console.warn('[students] update TA request failed:', e)
+    } finally {
+      console.groupEnd();
     }
   }
 
@@ -932,7 +1047,7 @@ export default function ChatPage() {
     setNudgeCount(0)
     setPendingNudge(null)
     setTaRequested(false)
-    // ★ 新しい問題を選択したタイミングで timerStartedAt をリセット
+    // ★ 新しい問題を選択したタイミングで「この問題に関するローカル累積タイムの状態」を students に送る
     updateStudentTimerForProblem(p, { resetTimer: true })
     // 問題を変えたら TA 呼び出しフラグもクリアしておく
     updateStudentTaRequest(false)
@@ -947,9 +1062,15 @@ export default function ChatPage() {
     const tick = () => {
       const { accum, runningAt } = readTimer(problem.id)
       const now = Date.now()
-      const ms = accum + (runningAt ? (now - runningAt) : 0)
-      const sec = Math.floor(ms / 1000)
+      const ms = accum + (now - (runningAt ?? now))
+      const sec = Math.max(0, Math.floor(ms / 1000))
       setElapsedSec(sec)
+      // ★ ローカルタイマーの値を定期的に Firestore に同期（10秒以上変化したとき）
+      if (sec > 0 && Math.abs(sec - lastTimerSyncRef.current) >= 10) {
+        lastTimerSyncRef.current = sec
+        // elapsedSec は引数で渡さず、関数内で getLocalElapsedSec から取得
+        updateStudentTimerForProblem(problem)
+      }
       if (sec >= NUDGE_FIRST && nudgeCount === 0) {
         pushAssistant('20分間取り組んでいますね。何かわからないことがあれば何でも質問してください。', { isNudge: true })
         setNudgeCount(1)
@@ -1279,7 +1400,7 @@ export default function ChatPage() {
     algoPoint, freeText,
   ])
 
-    /** 送信（通常モードのみ） */
+  /** 送信（通常モードのみ） */
   const sendWithContext = async (userContent: string, qType: QuestionTypeForLog) => {
     if (!userContent.trim() || !problem) return
 
@@ -1345,39 +1466,52 @@ ${summary}
 ${userContent}
 
 ${outputRule(lang)}`
-      } else if (qType === 'task') {
-        // 🟧 課題の読み解き・作業工程の整理（コードは一切出さない）
-        promptForLLM = String.raw`
-  あなたは、プログラミング課題の「読み解き」と「作業工程の整理」を手伝う教員です。
+    } else if (qType === 'task') {
+      // 🟧 課題の読み解き・作業工程の整理（コードは一切出さない）
+      promptForLLM = String.raw`
+あなたは、プログラミング課題の「読み解き」と「作業工程の整理」を手伝う教員です。
 
-  【重要制約】
-  - 具体的なコード例・疑似コード・数式の形のアルゴリズムは一切書かないでください。
-  - \`\`\` やコードブロック、セミコロン付きの行など、「そのまま写せば動きそうなもの」は出してはいけません。
-  - 代わりに、「課題文のどの部分をどう読むか」「どの順番で手を動かせば良いか」を日本語の文章と箇条書きだけで説明してください。
+【重要制約】
+- 具体的なコード例・疑似コード・数式の形のアルゴリズムは一切書かないでください。
+- \`\`\` やコードブロック、セミコロン付きの行など、「そのまま写せば動きそうなもの」は出してはいけません。
+- 代わりに、「課題文のどの部分をどう読むか」「どの順番で手を動かせば良いか」を日本語の文章と箇条書きだけで説明してください。
 
-  【相談モード】
-  ${modeDesc}
+【相談モード】
+${modeDesc}
 
-  【今回の授業内容（教員メモ）】
-  ${CURRENT_LESSON_DESCRIPTION}
+【今回の授業内容（教員メモ）】
+${CURRENT_LESSON_DESCRIPTION}
 
-  【今回扱っている問題】
-  ${problem.title}
-  ${problem.description}
+【今回扱っている問題】
+${problem.title}
+${problem.description}
 
-  【これまでの履歴要約】
-  ${summary}
+【これまでの履歴要約】
+${summary}
 
-  【学生の状況・考え】
-  ${userContent}
+【学生の状況・考え】
+${userContent}
 
-  [出力形式]
-  1) 課題のゴールの言い換え（1〜3文）
-  2) 作業工程のステップ（番号付きで3〜7ステップ程度）
-  3) 「今すぐできそうな最初の一歩」を1〜2文で提案
-  `.trim()
+[出力形式]
+1) 課題のゴールの言い換え（1〜3文）
+2) 作業工程のステップ（番号付きで3〜7ステップ程度）
+3) 「今すぐできそうな最初の一歩」を1〜2文で提案
+`.trim()
+    } else if (qType === 'free') {
+      // 🟪 自由記述：あいさつ・雑談用。コードは絶対に出さない＆5行以内
+      promptForLLM = String.raw`${FREE_TEXT_PROMPT}
+
+【相談モード】
+${modeDesc}
+
+【これまでの履歴要約】
+${summary}
+
+【学生の相談内容】
+${userContent}
+`
     } else {
-      // 🟦 文法・書き方 / 🟨 理論・アルゴリズム / 🟪 自由記述
+      // 🟦 文法・書き方 / 🟨 理論・アルゴリズム
       // → 問題文・模範コードは送らず、変数名を変えるルール＋禁止識別子リストを追加
       const bannedIdList = extractIdentifiersFromSolutionFiles(problem.solution_files || [])
       const bannedSection = bannedIdList.length
@@ -1571,10 +1705,35 @@ ${outputRule(lang)}`
     })
   }
   function removeUpload(idx: number) { setUploads(prev => prev.filter((_, i) => i !== idx)) }
+
   function handleDropOnFileZone(e: React.DragEvent<HTMLDivElement>) {
     e.preventDefault()
     if (e.dataTransfer?.files?.length) handlePickFiles(e.dataTransfer.files)
   }
+
+  function resolveStudentDocId(): string | null {
+    const fromState = studentId;
+    const fromStudentDoc = studentDocId;
+    const fromEmail = guessStudentIdFromEmail(auth.currentUser?.email ?? null);
+
+    console.group('[RESOLVE] resolveStudentDocId');
+    console.log('studentId state =', fromState);
+    console.log('studentDocId state =', fromStudentDoc);
+    console.log('email =', auth.currentUser?.email ?? null);
+    console.log('studentId guessed from email =', fromEmail);
+
+    let result: string | null = null;
+    if (fromState) result = fromState;
+    else if (fromStudentDoc) result = fromStudentDoc;
+    else if (fromEmail) result = fromEmail;
+
+    console.log('=> resolved docId =', result);
+    if (!result) console.warn('[RESOLVE] 学籍IDを決定できませんでした');
+    console.groupEnd();
+
+    return result;
+  }
+
 
   async function safeGetDownloadURL(r: ReturnType<typeof sRef>, timeoutMs = 8000): Promise<string> {
     return await Promise.race<string>([
@@ -1720,7 +1879,7 @@ ${filesForPrompt}
   /* ============ 画面描画 ============ */
   const sendDisabled = !problem || loading || waitingFeedback || !isQuestionValid
 
-  // ★ タイマー再開ボタンからも Firestore の timerStartedAt を更新
+  // ★ タイマー再開ボタンからも「ローカル累積タイムの状態」を students に反映  
   const handleTimerRestartClick = async () => {
     if (!problem || waitingFeedback) return
     pauseTimer(problem.id)
@@ -1761,8 +1920,24 @@ ${filesForPrompt}
           <div className="flex items-center justify-between mb-2">
             <h1 className="text-xl font-bold">{problem?.title || '問題未選択'}</h1>
             <div className="flex items-center gap-3">
-              {seatNumber && <span className="text-xs px-2 py-1 rounded border bg-white">座席: {seatNumber}</span>}
-              {problem && <span className="text-xs px-2 py-1 rounded border bg-white">⏱ 継続: {fmtHMS(elapsedSec)}</span>}
+              {/* ★ 学籍番号の表示 */}
+              {studentId && (
+                <span className="text-xs px-2 py-1 rounded border bg-white">
+                  学籍: {studentId}
+                </span>
+              )}
+
+              {seatNumber && (
+                <span className="text-xs px-2 py-1 rounded border bg-white">
+                  座席: {seatNumber}
+                </span>
+              )}
+
+              {problem && (
+                <span className="text-xs px-2 py-1 rounded border bg-white">
+                  ⏱ 継続: {fmtHMS(elapsedSec)}
+                </span>
+              )}
               {/* 40分以上取り組んでいるときだけ TA 呼び出しボタンを表示 */}
               {/* TA呼び出しボタン（画像＋テキスト） */}
               {/* TA呼び出しボタン：常に表示してトグルできるようにする */}
@@ -1779,13 +1954,6 @@ ${filesForPrompt}
                   {taRequested ? '👋 TA呼び出し中（クリックでキャンセル）' : 'TAを呼ぶ'}
                 </button>
               )}
-              <button
-                className={`border px-2 py-1 rounded text-xs ${waitingFeedback ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-50'}`}
-                onClick={handleTimerRestartClick}
-                disabled={waitingFeedback || !problem}
-              >
-                タイマー再開
-              </button>
             </div>
           </div>
 
