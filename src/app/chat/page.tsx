@@ -810,6 +810,7 @@ export default function ChatPage() {
           if (k.startsWith('selAccum:') || k.startsWith('selStart:')) localStorage.removeItem(k)
         })
         setElapsedSec(0)
+        setTaHintShown(false)
 
         const ref = doc(db, 'users', user.uid)
         const snap = await getDoc(ref)
@@ -918,6 +919,7 @@ export default function ChatPage() {
   const [elapsedSec, setElapsedSec] = useState(0)
   const [nudgeCount, setNudgeCount] = useState(0)
   const lastTimerSyncRef = useRef<number>(0)
+  const [taHintShown, setTaHintShown] = useState(false)
   const pad2 = (n: number) => n.toString().padStart(2, '0')
   const fmtHMS = (sec: number) => {
     const h = Math.floor(sec / 3600)
@@ -1047,6 +1049,7 @@ export default function ChatPage() {
     setNudgeCount(0)
     setPendingNudge(null)
     setTaRequested(false)
+    setTaHintShown(false)
     // ★ 新しい問題を選択したタイミングで「この問題に関するローカル累積タイムの状態」を students に送る
     updateStudentTimerForProblem(p, { resetTimer: true })
     // 問題を変えたら TA 呼び出しフラグもクリアしておく
@@ -1079,6 +1082,14 @@ export default function ChatPage() {
         pushAssistant('悩んでいる様子です。TAを呼んで一緒に解決しましょう。私に聞いても大丈夫です。', { isNudge: true })
         setNudgeCount(2)
       }
+      if (sec >= TA_CALL_THRESHOLD_SEC && !taHintShown) {
+        pushAssistant(
+          '40分以上同じ問題に取り組んでいるようです。\n' +
+          '画面右上に「TAを呼ぶ」ボタンが表示されています。\n' +
+          '人間のTAに来てもらいたい場合は、そのボタンを押してください。'
+        )
+        setTaHintShown(true)
+      } 
     }
     tick()
     const id = setInterval(tick, 1000)
