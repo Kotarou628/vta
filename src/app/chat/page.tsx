@@ -5,8 +5,6 @@ import React, {
   useEffect, useMemo, useRef, useState, ReactNode,
   forwardRef, useImperativeHandle,
 } from 'react'
-import Link from 'next/link'
-import Image from 'next/image'
 
 // Firestore / Auth
 import {
@@ -227,6 +225,30 @@ const FREE_TEXT_PROMPT = String.raw`
 - 日本語で 3〜5 文程度にまとめる。
 - 1 行に 1 文を目安とし、**最大 5 行以内**に収める。
 - 学生の気持ちを受け止めつつ、「次にどうすると良さそうか」を軽く提案する。
+`.trim()
+
+const buildAbstractionRulesForExample = (lang: string) => String.raw`
+【コード例の抽象化テンプレート】
+
+あなたは、プログラミング教材のためにコードを「抽象化テンプレート」に変換するアシスタントです。
+**エラー相談 / コードレビュー相談のときに出力する「コード例:」の部分**は、必ず次のルールに従って抽象化してください。
+
+以下の${lang}コード例を、**具体語（固有名・実データ）をすべて排除した抽象的な雛形**として書いてください。
+
+【目的】
+- 入力が日本語・英語・その他の言語であっても、抽象的で言語に依存しないテンプレートを作ること。
+- 出力は${lang}構文の形を保ちつつ、具体的な識別子や値を \`<～>\` で表現する。
+
+【ルール】
+1. **型（${lang}の型表現）はそのまま残す。**
+2. **識別子（クラス名・変数名・フィールド名・メソッド名）はすべて抽象語に置き換える。**
+   - 例: \`Person1\` → \`<ClassA>\`、\`id\` → \`<id>\`、\`score\` → \`<value1>\` など。
+3. **具体値も抽象化する（文字列/数値など）。**
+   - 例: \`"taro"\` → \`"<name>"\`、\`100\` → \`<number1>\` など。
+4. **コメントは残しつつ抽象語に置換する。**
+5. **コンパイル不要（構造理解が目的）。**
+6. この抽象化は **「コード例:」の中だけ** に適用する。  
+   アドバイス文や質問文では、元のクラス名や変数名をそのまま使って説明してよい。
 `.trim()
 
 /* ===== テンプレ（ステップUIで利用） ===== */
@@ -1082,14 +1104,19 @@ export default function ChatPage() {
         pushAssistant('悩んでいる様子です。TAを呼んで一緒に解決しましょう。私に聞いても大丈夫です。', { isNudge: true })
         setNudgeCount(2)
       }
-      if (sec >= TA_CALL_THRESHOLD_SEC && !taHintShown) {
-        pushAssistant(
-          '40分以上同じ問題に取り組んでいるようです。\n' +
-          '画面右上に「TAを呼ぶ」ボタンが表示されています。\n' +
-          '人間のTAに来てもらいたい場合は、そのボタンを押してください。'
-        )
-        setTaHintShown(true)
-      } 
+      if (sec >= TA_CALL_THRESHOLD_SEC) {
+        setTaHintShown(prev => {
+          if (!prev) {
+            // 初めて閾値を超えたときだけ一度だけ表示
+            pushAssistant(
+              '40分以上同じ問題に取り組んでいるようです。\n' +
+              '画面右上に「TAを呼ぶ」ボタンが表示されています。\n' +
+              '人間のTAに来てもらいたい場合は、そのボタンを押してください。'
+            )
+          }
+          return true
+        })
+      }
     }
     tick()
     const id = setInterval(tick, 1000)
@@ -1447,7 +1474,7 @@ export default function ChatPage() {
     let promptForLLM = ''
 
     if (qType === 'error' || qType === 'review') {
-      // 🟥 エラー・例外 / 🟩 コードレビュー・バグ
+      // (A) 模範コード全文（参考用）
       const exemplarForPrompt = (problem.solution_files || [])
         .map((f) => {
           const l = (f.language && f.language.trim()) || detectLang(f.code)
@@ -1455,29 +1482,37 @@ export default function ChatPage() {
         })
         .join('\n\n')
 
+      // (B) 「コード例:」だけに適用する抽象化ルール
+      const abstractionRules = buildAbstractionRulesForExample(lang)
+
+      // (C) 最終プロンプト
       promptForLLM = String.raw`${BASE_TEACHER_PROMPT(lang)}
 
-【相談モード】
-${modeDesc}
+  【相談モード】
+  ${modeDesc}
 
-【今回の授業内容（教員メモ）】
-${CURRENT_LESSON_DESCRIPTION}
+  【今回の授業内容（教員メモ）】
+  ${CURRENT_LESSON_DESCRIPTION}
 
-【今回扱っている問題】
-${problem.title}
-${problem.description}
+  【今回扱っている問題】
+  ${problem.title}
+  ${problem.description}
 
-【模範コード（参考・任意）】
-${exemplarForPrompt || '(この問題には模範コードが設定されていません)'}
+  【模範コード（参考・任意）】
+  ${exemplarForPrompt || '(この問題には模範コードが設定されていません)'}
 
-【これまでの履歴要約】
-${summary}
+  【これまでの履歴要約】
+  ${summary}
 
-【学生のコード・エラーや挙動の説明】
-${userContent}
+  【学生のコード・エラーや挙動の説明】
+  ${userContent}
 
-${outputRule(lang)}`
-    } else if (qType === 'task') {
+  【コード例の抽象化ルール】
+  ${abstractionRules}
+
+  ${outputRule(lang)}`
+    }
+ else if (qType === 'task') {
       // 🟧 課題の読み解き・作業工程の整理（コードは一切出さない）
       promptForLLM = String.raw`
 あなたは、プログラミング課題の「読み解き」と「作業工程の整理」を手伝う教員です。

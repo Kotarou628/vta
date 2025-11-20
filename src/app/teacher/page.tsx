@@ -63,6 +63,14 @@ type StudentSeat = {
   timerBaseSec?: number
   timerResumedAt?: Timestamp | null
   timerRunning?: boolean
+
+  // 本日分だけを座席ビューに出すための更新時刻
+  updatedAt?: Timestamp | null
+}
+
+const getStartOfTodayLocal = (): Date => {
+  const now = new Date()
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate())
 }
 
 const formatDateTime = (ts: Timestamp | null | undefined) => {
@@ -117,25 +125,35 @@ const seatBgClassByMinutes = (minutes: number | null): string => {
 
 // 座席ブロック定義（画像のレイアウト準拠）
 const seatBlocks = [
+  // 左ブロック：A/B/C の 02〜07
   {
     id: 'left',
     cols: ['A', 'B', 'C'],
-    rows: ['01', '02', '03', '04', '05', '06', '07'],
+    rows: ['02', '03', '04', '05', '06', '07'],
   },
+  // 中央左：D/E/F の 01〜07
   {
     id: 'midLeft',
     cols: ['D', 'E', 'F'],
-    rows: ['01', '02', '03', '04', '05', '06', '07', '08'],
+    rows: ['01', '02', '03', '04', '05', '06', '07'],
   },
+  // 中央：G/H/I の 01〜07
+  {
+    id: 'midCenter',
+    cols: ['G', 'H', 'I'],
+    rows: ['01', '02', '03', '04', '05', '06', '07'],
+  },
+  // 中央右：J/K/L の 01〜07
   {
     id: 'midRight',
-    cols: ['G', 'H', 'I'],
-    rows: ['01', '02', '03', '04', '05', '06', '07', '08'],
-  },
-  {
-    id: 'right',
     cols: ['J', 'K', 'L'],
     rows: ['01', '02', '03', '04', '05', '06', '07'],
+  },
+  // 一番右：M/L/N の 02〜07
+  {
+    id: 'farRight',
+    cols: ['M', 'L', 'N'], // 左から M, L, N の順で表示
+    rows: ['02', '03', '04', '05', '06', '07'],
   },
 ]
 
@@ -149,6 +167,9 @@ export default function TeacherPage() {
   const [resolvedFilter, setResolvedFilter] =
     useState<'all' | 'resolved' | 'unresolved'>('all')
   const [limitCount, setLimitCount] = useState<number>(100)
+
+  // ★ デバッグ用: クリックされた座席ID
+  const [debugSeatId, setDebugSeatId] = useState<string | null>(null)
 
   // 問題タイトル一覧（フィルタ用）
   const [problemOptions, setProblemOptions] = useState<
@@ -297,16 +318,24 @@ export default function TeacherPage() {
     const unsub = onSnapshot(
       collection(db, 'students'),
       (snap) => {
+        const todayStart = getStartOfTodayLocal() // 今日の 0:00
+
         const list: StudentSeat[] = []
         snap.forEach((docSnap) => {
           const d = docSnap.data() as any
           if (!d.seatNumber) return
+
+          const updatedAt: Timestamp | null = d.updatedAt ?? null
+          // updatedAt がない or 今日より前であれば「前回授業の残り」なので座席ビューから除外
+          if (!updatedAt || updatedAt.toDate() < todayStart) {
+            return
+          }
+
           list.push({
             id: docSnap.id,
             seatNumber: (d.seatNumber as string).toUpperCase(),
             currentProblemId: d.currentProblemId ?? null,
             currentProblemTitle: d.currentProblemTitle ?? null,
-            // timerStartedAt があれば優先。将来 startedAt に移行しても動くようフォールバックも持つ
             timerStartedAt: d.timerStartedAt ?? d.startedAt ?? null,
             startedAt: d.startedAt ?? null,
             taRequested: !!d.taRequested,
@@ -315,6 +344,7 @@ export default function TeacherPage() {
               typeof d.timerBaseSec === 'number' ? d.timerBaseSec : 0,
             timerResumedAt: d.timerResumedAt ?? null,
             timerRunning: !!d.timerRunning,
+            updatedAt,
           })
         })
         setStudents(list)
@@ -429,6 +459,20 @@ export default function TeacherPage() {
     return m
   }, [chatLogs, nowMs])
 
+  // ★ デバッグ用: 選択中座席の情報まとめ
+  const debugSeatInfo = debugSeatId ? studentSeatMap.get(debugSeatId) : undefined
+  const debugLatestAny = debugSeatId
+    ? seatLatestAnyProblemMap.get(debugSeatId)
+    : undefined
+
+  const debugCurrentProblemId =
+    debugSeatInfo?.currentProblemId ?? debugLatestAny?.problemId ?? null
+
+  const debugLatestForCurrent =
+    debugSeatId && debugCurrentProblemId
+      ? seatProblemLatestMap.get(`${debugSeatId}__${debugCurrentProblemId}`)
+      : undefined
+
   return (
     <main className="h-screen flex flex-col">
       {/* ヘッダ */}
@@ -450,7 +494,7 @@ export default function TeacherPage() {
           <button
             className="text-xs border rounded px-2 py-1 hover:bg-gray-50"
             onClick={() => {
-              // ★「再読み込み」は主に問題フィルタ用の候補を更新
+              // 「再読み込み」は主に問題フィルタ用の候補を更新
               setNowMs(Date.now())
               ;(async () => {
                 try {
@@ -602,9 +646,9 @@ export default function TeacherPage() {
 
               <div className="flex flex-wrap gap-6 justify-center">
                 {seatBlocks.map((block) => {
-                  // A〜C, J〜L ブロックだけ 1 行分下げる
+                  // 左(A〜C)と一番右(M/L/N)だけ 1 行分下げる
                   const offsetClass =
-                    block.id === 'left' || block.id === 'right' ? 'mt-14' : ''
+                    block.id === 'left' || block.id === 'farRight' ? 'mt-14' : ''
 
                   return (
                     <div
@@ -616,7 +660,7 @@ export default function TeacherPage() {
                     >
                       {block.rows.map((row) =>
                         block.cols.map((col) => {
-                          const seatId = `${col}${row}` // 例: A01
+                          const seatId = `${col}${row}` // 例: A02, M02
 
                           const seatInfo = studentSeatMap.get(seatId)
                           const latestAny = seatLatestAnyProblemMap.get(seatId)
@@ -647,8 +691,12 @@ export default function TeacherPage() {
                           let minutesToday: number | null = null
 
                           // タイマー開始時刻（存在すれば）：当日判定などに使う
+                          // timerStartedAt / startedAt が無い場合は updatedAt を開始時刻として扱う
                           const startedTs =
-                            seatInfo?.timerStartedAt ?? seatInfo?.startedAt ?? null
+                            seatInfo?.timerStartedAt ??
+                            seatInfo?.startedAt ??
+                            seatInfo?.updatedAt ??
+                            null
 
                           // ① timerBaseSec + timerResumedAt/timerRunning からの「現在の経過秒」
                           let elapsedSecByTimer: number | null = null
@@ -675,9 +723,7 @@ export default function TeacherPage() {
                           const isTodayByTimer =
                             (startedTs && isSameDay(startedTs, nowMs)) ||
                             (seatInfo?.timerResumedAt &&
-                              isSameDay(seatInfo.timerResumedAt, nowMs)) ||
-                            // 開始情報が無い古いデータの場合は、とりあえず今日扱いにする
-                            (!startedTs && !seatInfo?.timerResumedAt)
+                              isSameDay(seatInfo.timerResumedAt, nowMs))
 
                           if (elapsedSecByTimer != null && isTodayByTimer) {
                             minutesToday = Math.floor(elapsedSecByTimer / 60)
@@ -696,7 +742,7 @@ export default function TeacherPage() {
                             }
                           }
 
-                          // ③ さらにダメなら startedAt からの単純経過を fallback
+                          // ③ さらにダメなら startedTs からの単純経過を fallback
                           if (minutesToday == null && startedTs) {
                             if (isSameDay(startedTs, nowMs)) {
                               minutesToday = diffMinutesFromNow(startedTs, nowMs)
@@ -722,16 +768,46 @@ export default function TeacherPage() {
                           // TA呼び出し中の表示文言
                           let taLine = seatInfo?.taRequested ? 'TA呼び出し中' : ''
 
-                          // フィルタで特定の問題を選んだときは、
-                          // その問題以外の座席は空表示にする
+                          // ---- 「本日分の活動がある座席」かどうかの最終判定 ----
+                          let isTodaySeat = false
+                          if (isTodayByTimer) {
+                            isTodaySeat = true
+                          } else if (
+                            latestForCurrent?.createdAt &&
+                            isSameDay(latestForCurrent.createdAt, nowMs)
+                          ) {
+                            isTodaySeat = true
+                          } else if (
+                            latestAny?.createdAt &&
+                            isSameDay(latestAny.createdAt, nowMs)
+                          ) {
+                            isTodaySeat = true
+                          } else if (
+                            seatInfo?.updatedAt &&
+                            isSameDay(seatInfo.updatedAt, nowMs)
+                          ) {
+                            // チャットがまだなくても、今日 updatedAt が更新されていれば「本日活動あり」
+                            isTodaySeat = true
+                          }
+
+                          // 本日分の活動が何もない座席は「空席」として表示
+                          if (!isTodaySeat) {
+                            mainLine = ''
+                            subLine = ''
+                            taLine = ''
+                            minutesToday = null
+                            bgClass = 'bg-white'
+                          }
+
+                          // フィルタで特定の問題を選んだときは、その問題以外の座席は空表示
                           if (problemFilter !== 'all' && !matchesFilter) {
                             mainLine = ''
                             subLine = ''
                             taLine = ''
                           }
 
-                          // TA呼び出し中なら背景色を上書きして強調
-                          if (seatInfo?.taRequested) {
+                          // TA呼び出し中なら背景色を上書きして強調（本日分のみ）
+                          if (seatInfo?.taRequested && isTodaySeat) {
                             bgClass = 'bg-rose-200 border-rose-500'
                           }
 
@@ -739,11 +815,13 @@ export default function TeacherPage() {
                             <div
                               key={seatId}
                               className={`flex flex-col items-center justify-center h-14 border ${bgClass}`}
+                              // ★ デバッグ: 座席クリックで詳細表示
+                              onClick={() => setDebugSeatId(seatId)}
                             >
                               {/* 座席番号 + 呼び出しマーク */}
                               <div className="text-[11px] font-semibold flex items-center gap-1">
                                 <span>{seatId}</span>
-                                {seatInfo?.taRequested && <span>👋</span>}
+                                {seatInfo?.taRequested && isTodaySeat && <span>👋</span>}
                               </div>
 
                               {/* 問題タイトル */}
@@ -778,6 +856,40 @@ export default function TeacherPage() {
               ・特定の問題でフィルタしたとき：その問題に取り組んでいる座席だけを表示し、経過時間で色分けします。<br />
               ・チャット／採点／座席情報は Firestore の変更をリアルタイムで反映します。
             </div>
+
+            {/* ★ デバッグパネル */}
+            {debugSeatId && (
+              <div className="mt-2 border-t pt-2 text-[10px] text-gray-700">
+                <div className="flex items-center justify-between mb-1">
+                  <div className="font-semibold">
+                    デバッグ情報（座席 {debugSeatId} をクリック中）
+                  </div>
+                  <button
+                    className="border rounded px-2 py-0.5 text-[10px] bg-white hover:bg-gray-50"
+                    onClick={() => setDebugSeatId(null)}
+                  >
+                    閉じる
+                  </button>
+                </div>
+
+                <pre className="bg-gray-50 rounded p-2 overflow-auto max-h-48">
+{JSON.stringify(
+  {
+    now: new Date(nowMs).toISOString(),
+    seatInfo: debugSeatInfo ?? null,
+    latestAnyChat: debugLatestAny ?? null,
+    latestForCurrent: debugLatestForCurrent ?? null,
+  },
+  null,
+  2
+)}
+                </pre>
+                <div className="mt-1 text-[10px] text-gray-500">
+                  ※座席をクリックすると、その座席に対応する students ドキュメントと、<br />
+                  本日分の最新のチャット情報が JSON として表示されます。
+                </div>
+              </div>
+            )}
           </section>
 
           {/* チャットログ一覧（本日分） */}
