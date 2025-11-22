@@ -53,6 +53,17 @@ function getSeatNumberFromStorage(): string | null {
 /* ================== ポーズ式タイマー（問題ごと） ================== */
 const keyAccum = (id: string) => `selAccum:${id}`
 const keyStart = (id: string) => `selStart:${id}`
+const keyNudgeStage = (id: string) => `nudgeStage:${id}`
+
+function readNudgeStage(id: string): number {
+  const v = Number(localStorage.getItem(keyNudgeStage(id)) || 0)
+  if (!Number.isFinite(v)) return 0
+  return Math.max(0, Math.min(3, v)) // 0..3 に丸める
+}
+function writeNudgeStage(id: string, stage: number) {
+  localStorage.setItem(keyNudgeStage(id), String(stage))
+}
+
 
 function readTimer(id: string) {
   const accum = Number(localStorage.getItem(keyAccum(id)) || 0)
@@ -93,6 +104,9 @@ function resumeTimer(id: string) {
 type UpdateTimerOpts = {
   resetTimer?: boolean
 }
+
+const TIMER_OWNER_KEY = 'timerOwnerUid'
+
 
 /* ================== 入力欄ユーティリティ ================== */
 type AutoGrowProps = React.TextareaHTMLAttributes<HTMLTextAreaElement> & { maxVh?: number }
@@ -323,6 +337,7 @@ type Message = {
   content: string
   mode?: 'normal' | 'grading'
   questionType?: QuestionTypeForLog
+  isNudge?: boolean
 }
 type ProblemFile = { filename: string; code: string; language?: string }
 type Problem = { id: string; title: string; description: string; solution_files: ProblemFile[] }
@@ -804,7 +819,9 @@ export default function ChatPage() {
   // ===== 解決確認 =====
   const [waitingFeedback, setWaitingFeedback] = useState(false)
   const [lastAssistantIndex, setLastAssistantIndex] = useState<number | null>(null)
-  const [pendingNudge, setPendingNudge] = useState<string | null>(null)
+  // 20分・30分・40分コメントなどの「ナッジ」をためておくキュー
+  const [pendingNudges, setPendingNudges] = useState<string[]>([])
+
 
   // ===== seatNumber / studentId 初期取得 & ログイン時の全タイマーリセット =====
   const [seatNumber, setSeatNumber] = useState<string | null>(null)
@@ -827,12 +844,25 @@ export default function ChatPage() {
         return;
       }
       try {
-        // タイマー全リセット（元の処理そのまま）
-        Object.keys(localStorage).forEach((k) => {
-          if (k.startsWith('selAccum:') || k.startsWith('selStart:')) localStorage.removeItem(k)
-        })
-        setElapsedSec(0)
-        setTaHintShown(false)
+        // ★ 修正ポイント：
+        //   直前にログインしていたユーザーと今回の user.uid が「異なるときだけ」
+        //   問題ごとのローカルタイマーを全リセットする
+        const prevUid = localStorage.getItem(TIMER_OWNER_KEY)
+        if (prevUid && prevUid !== user.uid) {
+          Object.keys(localStorage).forEach((k) => {
+            if (k.startsWith('selAccum:') || k.startsWith('selStart:')) {
+              localStorage.removeItem(k)
+            }
+          })
+          setElapsedSec(0)
+          setNudgeStage(0)
+          nudgeStageRef.current = 0
+          console.log('[AUTH] detect user change. local timers were reset.')
+        } else {
+          console.log('[AUTH] same user as before. keep local timers.')
+        }
+        // 現在のログインユーザーを記録
+        localStorage.setItem(TIMER_OWNER_KEY, user.uid)
 
         const ref = doc(db, 'users', user.uid)
         const snap = await getDoc(ref)
@@ -873,6 +903,7 @@ export default function ChatPage() {
     })
     return () => unsub()
   }, [])
+
 
 
   // ★ seatNumber / studentId から students ドキュメントを用意
@@ -939,9 +970,9 @@ export default function ChatPage() {
 
 
   const [elapsedSec, setElapsedSec] = useState(0)
-  const [nudgeCount, setNudgeCount] = useState(0)
+  const [nudgeStage, setNudgeStage] = useState(0)
   const lastTimerSyncRef = useRef<number>(0)
-  const [taHintShown, setTaHintShown] = useState(false)
+  const nudgeStageRef = useRef(0)
   const pad2 = (n: number) => n.toString().padStart(2, '0')
   const fmtHMS = (sec: number) => {
     const h = Math.floor(sec / 3600)
@@ -1063,74 +1094,140 @@ export default function ChatPage() {
     })
   }
 
-  // 問題切替
   const handleSelectProblem = (p: Problem) => {
     if (problem) pauseTimer(problem.id)
+
     setProblem(p)
     resumeTimer(p.id)
-    setNudgeCount(0)
-    setPendingNudge(null)
+
+    // ★ ナッジ段階を問題ごとに復元（毎回リセットしない）
+    const stage = readNudgeStage(p.id)
+    setNudgeStage(stage)
+    nudgeStageRef.current = stage
+
+    setPendingNudges([])
     setTaRequested(false)
-    setTaHintShown(false)
-    // ★ 新しい問題を選択したタイミングで「この問題に関するローカル累積タイムの状態」を students に送る
+
     updateStudentTimerForProblem(p, { resetTimer: true })
-    // 問題を変えたら TA 呼び出しフラグもクリアしておく
     updateStudentTaRequest(false)
   }
 
   // 経過秒 & ナッジ
-  const NUDGE_FIRST = 20 * 60
-  const NUDGE_SECOND = 30 * 60
-  const TA_CALL_THRESHOLD_SEC = 40 * 60
+  const NUDGE_FIRST = 2 * 60
+  const NUDGE_SECOND = 3 * 60
+  const TA_CALL_THRESHOLD_SEC = 4 * 60
   useEffect(() => {
     if (!problem) return
+
     const tick = () => {
       const { accum, runningAt } = readTimer(problem.id)
       const now = Date.now()
       const ms = accum + (now - (runningAt ?? now))
       const sec = Math.max(0, Math.floor(ms / 1000))
       setElapsedSec(sec)
-      // ★ ローカルタイマーの値を定期的に Firestore に同期（10秒以上変化したとき）
-      if (sec > 0 && Math.abs(sec - lastTimerSyncRef.current) >= 10) {
-        lastTimerSyncRef.current = sec
-        // elapsedSec は引数で渡さず、関数内で getLocalElapsedSec から取得
-        updateStudentTimerForProblem(problem)
+
+      let stage = nudgeStageRef.current
+
+      // 20分
+      if (sec >= NUDGE_FIRST && stage < 1) {
+        pushAssistant(
+          '20分間取り組んでいますね。何かわからないことがあれば何でも質問してください。',
+          { isNudge: true }
+        )
+        stage = 1
       }
-      if (sec >= NUDGE_FIRST && nudgeCount === 0) {
-        pushAssistant('20分間取り組んでいますね。何かわからないことがあれば何でも質問してください。', { isNudge: true })
-        setNudgeCount(1)
+
+      // 30分（あなたの設定では26分コメント）
+      if (sec >= NUDGE_SECOND && stage < 2) {
+        pushAssistant(
+          '悩んでいる様子です。TAを呼んで一緒に解決しましょう。私に聞いても大丈夫です。',
+          { isNudge: true }
+        )
+        stage = 2
       }
-      if (sec >= NUDGE_SECOND && nudgeCount === 1) {
-        pushAssistant('悩んでいる様子です。TAを呼んで一緒に解決しましょう。私に聞いても大丈夫です。', { isNudge: true })
-        setNudgeCount(2)
+
+      // 40分
+      if (sec >= TA_CALL_THRESHOLD_SEC && stage < 3) {
+        pushAssistant(
+          '40分以上同じ問題に取り組んでいるようです。\n' +
+          '画面右上に「TAを呼ぶ」ボタンが表示されています。\n' +
+          '人間のTAに来てもらいたい場合は、そのボタンを押してください。',
+          { isNudge: true }
+        )
+        stage = 3
       }
-      if (sec >= TA_CALL_THRESHOLD_SEC) {
-        setTaHintShown(prev => {
-          if (!prev) {
-            // 初めて閾値を超えたときだけ一度だけ表示
-            pushAssistant(
-              '40分以上同じ問題に取り組んでいるようです。\n' +
-              '画面右上に「TAを呼ぶ」ボタンが表示されています。\n' +
-              '人間のTAに来てもらいたい場合は、そのボタンを押してください。'
-            )
-          }
-          return true
-        })
+
+      if (stage !== nudgeStageRef.current) {
+        nudgeStageRef.current = stage
+        setNudgeStage(stage)
+        writeNudgeStage(problem.id, stage) // ★ 永続化
       }
     }
+
     tick()
     const id = setInterval(tick, 1000)
     return () => clearInterval(id)
-  }, [problem, nudgeCount, waitingFeedback])
+  }, [problem, waitingFeedback, loading])
 
-  const pushAssistant = (text: string, { isNudge = false }: { isNudge?: boolean } = {}) => {
+  const pushAssistant = (
+    text: string,
+    { isNudge = false }: { isNudge?: boolean } = {}
+  ) => {
     if (!problem) return
-    if (isNudge && waitingFeedback) { setPendingNudge(text); return }
-    setAllMessages((prev) => {
+
+    // ★ ナッジのとき、LLM ストリーミング中ならいったんキューに積む
+    if (isNudge && loading) {
+      setPendingNudges(prev => {
+        // すでに同じ文面のナッジがキューにあるなら追加しない
+        if (prev.includes(text)) return prev
+        return [...prev, text]
+      })
+      return
+    }
+
+    setAllMessages(prev => {
       const cur = prev[problem.id] || []
-      return { ...prev, [problem.id]: [...cur, { role: 'assistant', content: text }] }
+      return {
+        ...prev,
+        [problem.id]: [
+          ...cur,
+          {
+            role: 'assistant' as const,
+            content: text,
+            ...(isNudge ? { isNudge: true } : {}),
+          },
+        ],
+      }
     })
   }
+
+  // ★ ナッジの自動フラッシュ
+  useEffect(() => {
+    // 問題未選択 or ローディング中 or キュー空 → 何もしない
+    if (!problem) return
+    if (loading) return
+    if (pendingNudges.length === 0) return
+
+    // ローディングが終わったタイミングで、キューされていたナッジを順番に流す
+    const texts = [...pendingNudges]
+    setPendingNudges([])
+
+    setAllMessages(prev => {
+      const cur = prev[problem.id] || []
+
+      return {
+        ...prev,
+        [problem.id]: [
+          ...cur,
+          ...texts.map(t => ({
+            role: 'assistant' as const,
+            content: t,
+            isNudge: true,           // ★ ナッジであることを明示
+          })),
+        ],
+      }
+    })
+  }, [loading, pendingNudges, problem])
 
   // ストリーミング更新
   const createStreamingAssistant = (initial = '') => {
@@ -1666,13 +1763,36 @@ ${outputRule(lang)}`
       let userQuestionType: QuestionTypeForLog | null = null
 
       let aIdx = -1
+
+      // ★ 1. まず「ナッジではない最後の assistant」を探す
       for (let i = msgs.length - 1; i >= 0; i--) {
-        if (msgs[i].role === 'assistant') {
+        const m = msgs[i]
+        if (m.role === 'assistant' && !m.isNudge) {
           aIdx = i
-          assistantMessage = msgs[i].content
+          assistantMessage = m.content
           break
         }
       }
+
+      // ★ 2. 見つからなければ（＝ナッジしかない場合）は従来通り最後の assistant を使う
+      if (aIdx === -1) {
+        for (let i = msgs.length - 1; i >= 0; i--) {
+          const m = msgs[i]
+          if (m.role === 'assistant') {
+            aIdx = i
+            assistantMessage = m.content
+            break
+          }
+        }
+      }
+
+      // assistant が 1つも無いならログを作らない
+      if (aIdx === -1) {
+        console.warn('[Firestore] no assistant message found, skip persistChatLog')
+        return
+      }
+
+      // 直前の user を探す（従来通り）
       if (aIdx !== -1) {
         for (let j = aIdx - 1; j >= 0; j--) {
           const m = msgs[j]
@@ -1695,7 +1815,7 @@ ${outputRule(lang)}`
         assistantMessage,
         resolved,
         seatNumber: seat ?? null,
-        studentId: studentId ?? null,                  // ★ 追加
+        studentId: studentId ?? null,
         problemTitle: problem.title,
         problemId: problem.id,
         userId: user?.uid ?? null,
@@ -1716,8 +1836,8 @@ ${outputRule(lang)}`
     await persistChatLog(resolved)
     setWaitingFeedback(false)
     setLastAssistantIndex(null)
-    if (pendingNudge) { const text = pendingNudge; setPendingNudge(null); setTimeout(() => pushAssistant(text), 10) }
   }
+
 
   const formatMessageContent = (content: string): (string | { code: string })[] => {
     const regex = /```(?:[a-zA-Z0-9#+-]*)?\n([\s\S]*?)```/g
@@ -2066,6 +2186,7 @@ ${filesForPrompt}
               //    「バブル＋アンケート」をまとめて表示するように変更
               if (
                 msg.role === 'assistant' &&
+                !msg.isNudge &&
                 waitingFeedback &&
                 (lastAssistantIndex === null || idx >= (lastAssistantIndex ?? 0))
               ) {
