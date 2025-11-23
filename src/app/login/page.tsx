@@ -12,17 +12,29 @@ import {
 } from 'firebase/firestore';
 import { signInAnonymously } from 'firebase/auth';
 
-/** 全角→半角・前後空白除去・英字大文字化 */
-const normalizeSeat = (raw: string) =>
-  (raw || '')
-    .replace(/[Ａ-Ｚａ-ｚ０-９]/g, (s) =>
-      String.fromCharCode(s.charCodeAt(0) - 0xfee0)
-    )
-    .trim()
-    .toUpperCase();
+/** 全角→半角・前後空白除去・英字大文字化 + 1桁番号を0埋め */
+const normalizeSeat = (raw: string) => {
+  let s =
+    (raw || '')
+      .replace(/[Ａ-Ｚａ-ｚ０-９]/g, (ch) =>
+        String.fromCharCode(ch.charCodeAt(0) - 0xfee0)
+      )
+      .trim()
+      .toUpperCase();
 
-/** A〜L + 01〜08 のみ許可（必要なら変更可能） */
-const isValidSeat = (seat: string) => /^[A-L](0[1-8])$/.test(seat);
+  // 例: "K5" / "k 5" / "K05" を "K05" に正規化
+  const m = s.match(/^([A-Z])\s*0?(\d{1,2})$/);
+  if (m) {
+    const letter = m[1];
+    const num2 = m[2].padStart(2, '0');
+    s = `${letter}${num2}`;
+  }
+  return s;
+};
+
+/** A〜N + 01〜08 を許可（座席表に合わせる） */
+const isValidSeat = (seat: string) => /^[A-N](0[1-8])$/.test(seat);
+
 
 /** ローカル保存（chat ページの互換維持） */
 async function saveSeatLocal(seat: string, studentId: string) {
@@ -92,12 +104,13 @@ export default function LoginPage() {
       setError('学籍番号を入力してください。');
       return;
     }
+
     if (!isValidSeat(seatNormalized)) {
       setLoading(false);
-      setError('席番号は A01〜L08 の形式で入力してください。');
+      setError('席番号は A01〜N08 の形式で入力してください。（例: K05 / M02）');
       return;
     }
-
+    
     try {
       console.group('[LOGIN] handleLogin');
       console.log('[LOGIN] input studentId =', sid);
@@ -149,7 +162,7 @@ export default function LoginPage() {
 
   const seatHelp =
     seat && !isValidSeat(normalizeSeat(seat))
-      ? '例: A01 / B08（英字+2桁、全角可）'
+      ? '例: A01 / B08 / K05 / M02（英字+2桁、全角可）'
       : '';
 
   return (
