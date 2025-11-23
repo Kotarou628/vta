@@ -44,6 +44,7 @@ type Submission = {
   durationSec?: number
   files: { name: string; size: number; downloadURL?: string }[]
   inputMode?: 'files' | 'paste'
+  gradingResult?: string // ★ 生成AIの採点/評価出力
 }
 
 // 座席情報（students コレクション）
@@ -73,6 +74,23 @@ const getStartOfTodayLocal = (): Date => {
   return new Date(now.getFullYear(), now.getMonth(), now.getDate())
 }
 
+// ★ YYYY-MM-DD の文字列 → その日の local Date（正午に寄せて DST 事故を避ける）
+const dateMsFromYMDLocalNoon = (ymd: string): number | null => {
+  if (!ymd) return null
+  const [y, m, d] = ymd.split('-').map((v) => Number(v))
+  if (!y || !m || !d) return null
+  return new Date(y, m - 1, d, 12, 0, 0, 0).getTime()
+}
+
+// ★ 今日の YYYY-MM-DD（local）
+const getTodayYMDLocal = (): string => {
+  const now = new Date()
+  const y = now.getFullYear()
+  const m = String(now.getMonth() + 1).padStart(2, '0')
+  const d = String(now.getDate()).padStart(2, '0')
+  return `${y}-${m}-${d}`
+}
+
 const formatDateTime = (ts: Timestamp | null | undefined) => {
   if (!ts) return ''
   const d = ts.toDate()
@@ -91,7 +109,7 @@ const secondsToMin = (sec?: number) => {
   return `${m}分${s}秒`
 }
 
-// 同じ日付かどうか（本日かどうかの判定に使用）
+// 同じ日付かどうか（「選択日の履歴」判定にも使用）
 const isSameDay = (ts: Timestamp | null | undefined, nowMs: number) => {
   if (!ts) return false
   const d1 = ts.toDate()
@@ -157,9 +175,11 @@ const seatBlocks = [
   },
 ]
 
-export default function TeacherPage() {
-  const [tab, setTab] = useState<'chat' | 'grading'>('chat')
+type UnifiedEntry =
+  | ({ kind: 'chat' } & ChatLog)
+  | ({ kind: 'grading'; createdAt: Timestamp | null } & Submission)
 
+export default function TeacherPage() {
   // ===== 共通フィルタ状態 =====
   const [problemFilter, setProblemFilter] = useState<string>('all')
   const [questionTypeFilter, setQuestionTypeFilter] =
@@ -167,6 +187,9 @@ export default function TeacherPage() {
   const [resolvedFilter, setResolvedFilter] =
     useState<'all' | 'resolved' | 'unresolved'>('all')
   const [limitCount, setLimitCount] = useState<number>(100)
+
+  // ★ 追加：ログ用の日付フィルタ（座席表には影響しない）
+  const [logDateYMD, setLogDateYMD] = useState<string>(getTodayYMDLocal())
 
   // ★ デバッグ用: クリックされた座席ID
   const [debugSeatId, setDebugSeatId] = useState<string | null>(null)
@@ -194,6 +217,12 @@ export default function TeacherPage() {
     const id = setInterval(() => setNowMs(Date.now()), 60_000) // 1分ごとに更新
     return () => clearInterval(id)
   }, [])
+
+  // ★ 選択日（ログ一覧用）の ms
+  const selectedDayMs = useMemo(() => {
+    const ms = dateMsFromYMDLocalNoon(logDateYMD)
+    return ms ?? nowMs
+  }, [logDateYMD, nowMs])
 
   // ---- 問題リスト取得（chatLogs から一度だけ。必要なら「再読み込み」で更新）----
   useEffect(() => {
@@ -298,6 +327,7 @@ export default function TeacherPage() {
             durationSec: d.durationSec,
             files: Array.isArray(d.files) ? d.files : [],
             inputMode: d.inputMode,
+            gradingResult: d.gradingResult ?? '', // ★ 追加
           })
         })
         setSubmissions(list)
@@ -359,10 +389,10 @@ export default function TeacherPage() {
     return () => unsub()
   }, [])
 
-  // フィルタ適用後のチャットログ（本日分のみ）
+  // フィルタ適用後のチャットログ（★選択日分のみ）
   const filteredChatLogs = useMemo(() => {
     return chatLogs.filter((log) => {
-      if (!isSameDay(log.createdAt, nowMs)) return false
+      if (!isSameDay(log.createdAt, selectedDayMs)) return false
       if (problemFilter !== 'all' && log.problemId !== problemFilter) return false
       if (
         questionTypeFilter !== 'all' &&
@@ -373,16 +403,43 @@ export default function TeacherPage() {
       if (resolvedFilter === 'unresolved' && log.resolved) return false
       return true
     })
-  }, [chatLogs, problemFilter, questionTypeFilter, resolvedFilter, nowMs])
+  }, [
+    chatLogs,
+    problemFilter,
+    questionTypeFilter,
+    resolvedFilter,
+    selectedDayMs,
+  ])
 
-  // フィルタ適用後の submissions（本日分のみ）
+  // フィルタ適用後の submissions（★選択日分のみ）
   const filteredSubmissions = useMemo(() => {
     return submissions.filter((s) => {
-      if (!isSameDay(s.submittedAt, nowMs)) return false
+      if (!isSameDay(s.submittedAt, selectedDayMs)) return false
       if (problemFilter !== 'all' && s.problemId !== problemFilter) return false
       return true
     })
-  }, [submissions, problemFilter, nowMs])
+  }, [submissions, problemFilter, selectedDayMs])
+
+  // ★ チャット + 採点提出 を 1つの時系列ログに統合（★選択日）
+  const unifiedEntries: UnifiedEntry[] = useMemo(() => {
+    const chats: UnifiedEntry[] = filteredChatLogs.map((c) => ({
+      kind: 'chat',
+      ...c,
+    }))
+    const grads: UnifiedEntry[] = filteredSubmissions.map((s) => ({
+      kind: 'grading',
+      ...s,
+      createdAt: s.submittedAt ?? null,
+    }))
+
+    const all = [...chats, ...grads]
+    all.sort((a, b) => {
+      const ta = a.createdAt?.toDate().getTime() ?? 0
+      const tb = b.createdAt?.toDate().getTime() ?? 0
+      return tb - ta
+    })
+    return all
+  }, [filteredChatLogs, filteredSubmissions])
 
   // seatNumber → StudentSeat のマップ
   const studentSeatMap = useMemo(() => {
@@ -406,10 +463,9 @@ export default function TeacherPage() {
       }
     >()
 
-    // chatLogs は createdAt desc で取得しているので、最初に見つけたものが「その座席で本日最後の質問」
     chatLogs.forEach((log) => {
       if (!log.seatNumber || !log.problemId) return
-      if (!isSameDay(log.createdAt, nowMs)) return
+      if (!isSameDay(log.createdAt, nowMs)) return // ★座席表は本日固定
 
       const key = log.seatNumber.toUpperCase()
       if (!m.has(key)) {
@@ -438,10 +494,9 @@ export default function TeacherPage() {
       }
     >()
 
-    // 同じく createdAt desc 前提で「最初に見つけた seat×problem の組」を採用
     chatLogs.forEach((log) => {
       if (!log.seatNumber || !log.problemId) return
-      if (!isSameDay(log.createdAt, nowMs)) return
+      if (!isSameDay(log.createdAt, nowMs)) return // ★座席表は本日固定
 
       const seatId = log.seatNumber.toUpperCase()
       const key = `${seatId}__${log.problemId}`
@@ -472,6 +527,8 @@ export default function TeacherPage() {
     debugSeatId && debugCurrentProblemId
       ? seatProblemLatestMap.get(`${debugSeatId}__${debugCurrentProblemId}`)
       : undefined
+
+  const anyLoading = chatLoading || subLoading
 
   return (
     <main className="h-screen flex flex-col">
@@ -534,29 +591,25 @@ export default function TeacherPage() {
       <div className="flex flex-1 overflow-hidden">
         {/* 左：フィルタ */}
         <aside className="w-64 border-r p-3 text-xs bg-gray-50 space-y-3 overflow-y-auto">
+          {/* ★ 追加：日付フィルタ（ログ一覧のみ切替） */}
           <div>
-            <div className="font-semibold mb-1 text-gray-700">タブ</div>
-            <div className="flex gap-2">
+            <div className="font-semibold mb-1 text-gray-700">日付フィルタ（ログ一覧）</div>
+            <input
+              type="date"
+              className="w-full border rounded px-2 py-1 bg-white"
+              value={logDateYMD}
+              onChange={(e) => setLogDateYMD(e.target.value)}
+            />
+            <div className="mt-1 flex gap-1">
               <button
-                className={`flex-1 border rounded px-2 py-1 ${
-                  tab === 'chat'
-                    ? 'bg-blue-100 border-blue-400'
-                    : 'bg-white hover:bg-gray-50'
-                }`}
-                onClick={() => setTab('chat')}
+                className="border rounded px-2 py-0.5 text-[10px] bg-white hover:bg-gray-50"
+                onClick={() => setLogDateYMD(getTodayYMDLocal())}
               >
-                チャットログ
+                今日へ戻す
               </button>
-              <button
-                className={`flex-1 border rounded px-2 py-1 ${
-                  tab === 'grading'
-                    ? 'bg-green-100 border-green-400'
-                    : 'bg-white hover:bg-gray-50'
-                }`}
-                onClick={() => setTab('grading')}
-              >
-                採点提出
-              </button>
+            </div>
+            <div className="text-[10px] text-gray-500 mt-1">
+              ※座席ビューは本日固定です。ここで切り替わるのは下のログ一覧だけです。
             </div>
           </div>
 
@@ -576,39 +629,40 @@ export default function TeacherPage() {
             </select>
           </div>
 
-          {tab === 'chat' && (
-            <>
-              <div>
-                <div className="font-semibold mb-1 text-gray-700">質問タイプ</div>
-                <select
-                  className="w-full border rounded px-2 py-1 bg-white"
-                  value={questionTypeFilter}
-                  onChange={(e) => setQuestionTypeFilter(e.target.value as any)}
-                >
-                  <option value="all">すべて</option>
-                  <option value="error">エラー・例外</option>
-                  <option value="syntax">文法・書き方</option>
-                  <option value="review">コードレビュー</option>
-                  <option value="algo">理論・アルゴリズム</option>
-                  <option value="free">自由記述</option>
-                  <option value="unknown">不明</option>
-                </select>
-              </div>
+          {/* 既存フィルタは残す（チャットにのみ効く） */}
+          <div>
+            <div className="font-semibold mb-1 text-gray-700">質問タイプ</div>
+            <select
+              className="w-full border rounded px-2 py-1 bg-white"
+              value={questionTypeFilter}
+              onChange={(e) => setQuestionTypeFilter(e.target.value as any)}
+            >
+              <option value="all">すべて</option>
+              <option value="error">エラー・例外</option>
+              <option value="syntax">文法・書き方</option>
+              <option value="review">コードレビュー</option>
+              <option value="algo">理論・アルゴリズム</option>
+              <option value="free">自由記述</option>
+              <option value="unknown">不明</option>
+            </select>
+          </div>
 
-              <div>
-                <div className="font-semibold mb-1 text-gray-700">解決状況</div>
-                <select
-                  className="w-full border rounded px-2 py-1 bg-white"
-                  value={resolvedFilter}
-                  onChange={(e) => setResolvedFilter(e.target.value as any)}
-                >
-                  <option value="all">すべて</option>
-                  <option value="resolved">解決済み</option>
-                  <option value="unresolved">未解決</option>
-                </select>
-              </div>
-            </>
-          )}
+          <div>
+            <div className="font-semibold mb-1 text-gray-700">解決状況</div>
+            <select
+              className="w-full border rounded px-2 py-1 bg-white"
+              value={resolvedFilter}
+              onChange={(e) => setResolvedFilter(e.target.value as any)}
+            >
+              <option value="all">すべて</option>
+              <option value="resolved">解決済み</option>
+              <option value="unresolved">未解決</option>
+            </select>
+          </div>
+
+          <div className="text-[10px] text-gray-500">
+            ※質問タイプ/解決状況フィルタはチャットログのみ対象です。採点提出は問題フィルタのみ適用されます。
+          </div>
         </aside>
 
         {/* 右：メイン表示 */}
@@ -616,7 +670,7 @@ export default function TeacherPage() {
           {/* 座席ビュー */}
           <section className="border rounded bg-white p-3 text-xs space-y-2">
             <div className="flex items-center justify-between mb-1">
-              <h2 className="font-semibold text-sm">座席ビュー</h2>
+              <h2 className="font-semibold text-sm">座席ビュー（本日固定）</h2>
               <div className="text-[10px] text-gray-500 flex items-center gap-3">
                 {studentsLoading ? <span>読み込み中...</span> : null}
                 <span>色凡例（本日分・全モード共通）:</span>
@@ -646,7 +700,6 @@ export default function TeacherPage() {
 
               <div className="flex flex-wrap gap-6 justify-center">
                 {seatBlocks.map((block) => {
-                  // 左(A〜C)と一番右(M/L/N)だけ 1 行分下げる
                   const offsetClass =
                     block.id === 'left' || block.id === 'farRight' ? 'mt-14' : ''
 
@@ -660,18 +713,16 @@ export default function TeacherPage() {
                     >
                       {block.rows.map((row) =>
                         block.cols.map((col) => {
-                          const seatId = `${col}${row}` // 例: A02, M02
+                          const seatId = `${col}${row}`
 
                           const seatInfo = studentSeatMap.get(seatId)
                           const latestAny = seatLatestAnyProblemMap.get(seatId)
 
-                          // 現在その座席で選択されている問題ID
                           const currentProblemId =
                             seatInfo?.currentProblemId ??
                             latestAny?.problemId ??
                             null
 
-                          // 「現在の問題」に対応する最新チャット（本日分）
                           const latestForCurrent =
                             currentProblemId != null
                               ? seatProblemLatestMap.get(
@@ -679,7 +730,6 @@ export default function TeacherPage() {
                                 )
                               : undefined
 
-                          // 表示用の問題ID/タイトル（本日分）
                           const problemId = currentProblemId
                           const title =
                             seatInfo?.currentProblemTitle ??
@@ -687,18 +737,14 @@ export default function TeacherPage() {
                             latestAny?.title ??
                             ''
 
-                          // ---- 経過時間（分）の計算 ----
                           let minutesToday: number | null = null
 
-                          // タイマー開始時刻（存在すれば）：当日判定などに使う
-                          // timerStartedAt / startedAt が無い場合は updatedAt を開始時刻として扱う
                           const startedTs =
                             seatInfo?.timerStartedAt ??
                             seatInfo?.startedAt ??
                             seatInfo?.updatedAt ??
                             null
 
-                          // ① timerBaseSec + timerResumedAt/timerRunning からの「現在の経過秒」
                           let elapsedSecByTimer: number | null = null
                           const baseSec =
                             typeof seatInfo?.timerBaseSec === 'number'
@@ -719,7 +765,6 @@ export default function TeacherPage() {
                             elapsedSecByTimer = sec
                           }
 
-                          // 「今日のもの」かどうか（開始時刻か再開時刻で判定）
                           const isTodayByTimer =
                             (startedTs && isSameDay(startedTs, nowMs)) ||
                             (seatInfo?.timerResumedAt &&
@@ -729,7 +774,6 @@ export default function TeacherPage() {
                             minutesToday = Math.floor(elapsedSecByTimer / 60)
                           }
 
-                          // ② 「その問題」の最新質問の durationSec（累積時間）を fallback として利用
                           if (minutesToday == null) {
                             if (
                               latestForCurrent?.createdAt &&
@@ -742,7 +786,6 @@ export default function TeacherPage() {
                             }
                           }
 
-                          // ③ さらにダメなら startedTs からの単純経過を fallback
                           if (minutesToday == null && startedTs) {
                             if (isSameDay(startedTs, nowMs)) {
                               minutesToday = diffMinutesFromNow(startedTs, nowMs)
@@ -753,7 +796,6 @@ export default function TeacherPage() {
                             problemFilter === 'all' ||
                             (problemId && problemId === problemFilter)
 
-                          // 経過時間に応じた背景色（あとで TA 呼び出し中なら上書き）
                           let bgClass =
                             matchesFilter && minutesToday != null
                               ? seatBgClassByMinutes(minutesToday)
@@ -765,10 +807,8 @@ export default function TeacherPage() {
                               ? `${minutesToday}分経過`
                               : ''
 
-                          // TA呼び出し中の表示文言
                           let taLine = seatInfo?.taRequested ? 'TA呼び出し中' : ''
 
-                          // ---- 「本日分の活動がある座席」かどうかの最終判定 ----
                           let isTodaySeat = false
                           if (isTodayByTimer) {
                             isTodaySeat = true
@@ -786,11 +826,9 @@ export default function TeacherPage() {
                             seatInfo?.updatedAt &&
                             isSameDay(seatInfo.updatedAt, nowMs)
                           ) {
-                            // チャットがまだなくても、今日 updatedAt が更新されていれば「本日活動あり」
                             isTodaySeat = true
                           }
 
-                          // 本日分の活動が何もない座席は「空席」として表示
                           if (!isTodaySeat) {
                             mainLine = ''
                             subLine = ''
@@ -799,14 +837,12 @@ export default function TeacherPage() {
                             bgClass = 'bg-white'
                           }
 
-                          // フィルタで特定の問題を選んだときは、その問題以外の座席は空表示
                           if (problemFilter !== 'all' && !matchesFilter) {
                             mainLine = ''
                             subLine = ''
                             taLine = ''
                           }
 
-                          // TA呼び出し中なら背景色を上書きして強調（本日分のみ）
                           if (seatInfo?.taRequested && isTodaySeat) {
                             bgClass = 'bg-rose-200 border-rose-500'
                           }
@@ -815,26 +851,21 @@ export default function TeacherPage() {
                             <div
                               key={seatId}
                               className={`flex flex-col items-center justify-center h-14 border ${bgClass}`}
-                              // ★ デバッグ: 座席クリックで詳細表示
                               onClick={() => setDebugSeatId(seatId)}
                             >
-                              {/* 座席番号 + 呼び出しマーク */}
                               <div className="text-[11px] font-semibold flex items-center gap-1">
                                 <span>{seatId}</span>
                                 {seatInfo?.taRequested && isTodaySeat && <span>👋</span>}
                               </div>
 
-                              {/* 問題タイトル */}
                               <div className="text-[10px] text-center px-1 truncate w-full">
                                 {mainLine || ''}
                               </div>
 
-                              {/* 経過時間 */}
                               <div className="text-[10px] text-center text-gray-700">
                                 {subLine}
                               </div>
 
-                              {/* TA呼び出し状態のテキスト */}
                               {taLine && (
                                 <div className="text-[10px] text-center text-rose-700 font-semibold">
                                   {taLine}
@@ -851,7 +882,7 @@ export default function TeacherPage() {
             </div>
 
             <div className="text-[10px] text-gray-500 mt-1">
-              ・本日の履歴のみを対象としています（前日以前のデータは座席ビュー／一覧には表示されません）。<br />
+              ・本日の履歴のみを対象としています（前日以前のデータは座席ビューには表示されません）。<br />
               ・問題フィルタ「すべて」のとき：各座席の本日分の問題タイトルと経過時間を表示します。<br />
               ・特定の問題でフィルタしたとき：その問題に取り組んでいる座席だけを表示し、経過時間で色分けします。<br />
               ・チャット／採点／座席情報は Firestore の変更をリアルタイムで反映します。
@@ -892,114 +923,108 @@ export default function TeacherPage() {
             )}
           </section>
 
-          {/* チャットログ一覧（本日分） */}
-          {tab === 'chat' && (
-            <>
-              <div className="flex items-center justify-between mb-1">
-                <h2 className="font-semibold text-sm">チャットログ一覧（本日分）</h2>
-                <span className="text-xs text-gray-500">
-                  {chatLoading
-                    ? '読み込み中...'
-                    : `表示件数: ${filteredChatLogs.length} 件`}
-                </span>
+          {/* ★ 統合ログ一覧（選択日分） */}
+          <section className="space-y-2">
+            <div className="flex items-center justify-between mb-1">
+              <h2 className="font-semibold text-sm">
+                ログ一覧（選択日: {logDateYMD}・チャット＋採点提出）
+              </h2>
+              <span className="text-xs text-gray-500">
+                {anyLoading
+                  ? '読み込み中...'
+                  : `合計: ${unifiedEntries.length} 件（チャット ${filteredChatLogs.length} / 採点 ${filteredSubmissions.length}）`}
+              </span>
+            </div>
+
+            {unifiedEntries.length === 0 && !anyLoading && (
+              <div className="text-xs text-gray-500 border rounded p-3 bg-white">
+                選択日で条件に一致するログがありません。
               </div>
+            )}
 
-              {filteredChatLogs.length === 0 && !chatLoading && (
-                <div className="text-xs text-gray-500 border rounded p-3 bg-white">
-                  本日分で条件に一致するチャットログがありません。
-                </div>
-              )}
+            <div className="space-y-2">
+              {unifiedEntries.map((e) => {
+                if (e.kind === 'chat') {
+                  const log = e
+                  return (
+                    <details
+                      key={`chat-${log.id}`}
+                      className="border rounded bg-white text-xs"
+                    >
+                      <summary className="px-3 py-2 cursor-pointer flex items-center justify-between gap-3">
+                        <div className="flex flex-col gap-1 min-w-0">
+                          <div className="flex flex-wrap gap-2 items-center">
+                            <span className="font-semibold truncate max-w-[18rem]">
+                              {log.problemTitle || '(問題タイトル未設定)'}
+                            </span>
+                            <span className="px-1.5 py-0.5 rounded border bg-blue-50">
+                              チャット
+                            </span>
+                            {log.seatNumber && (
+                              <span className="px-1.5 py-0.5 rounded border bg-gray-50">
+                                座席: {log.seatNumber}
+                              </span>
+                            )}
+                            {log.questionType && (
+                              <span className="px-1.5 py-0.5 rounded border bg-blue-50">
+                                種類: {log.questionType}
+                              </span>
+                            )}
+                            <span
+                              className={`px-1.5 py-0.5 rounded border ${
+                                log.resolved
+                                  ? 'bg-emerald-50 border-emerald-300 text-emerald-700'
+                                  : 'bg-amber-50 border-amber-300 text-amber-800'
+                              }`}
+                            >
+                              {log.resolved ? '解決' : '未解決'}
+                            </span>
+                          </div>
+                          <div className="text-[11px] text-gray-500 flex flex-wrap gap-2">
+                            <span>{formatDateTime(log.createdAt)}</span>
+                            {typeof log.durationSec === 'number' && (
+                              <span>着席〜質問まで: {secondsToMin(log.durationSec)}</span>
+                            )}
+                          </div>
+                          <div className="text-[11px] text-gray-700 truncate">
+                            {log.userMessage.replace(/\s+/g, ' ').slice(0, 80)}
+                            {log.userMessage.length > 80 && '...'}
+                          </div>
+                        </div>
+                      </summary>
+                      <div className="border-t px-3 py-2 grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <div className="space-y-1">
+                          <div className="font-semibold text-gray-700">学生の質問</div>
+                          <pre className="whitespace-pre-wrap text-[11px] bg-gray-50 rounded p-2 overflow-auto max-h-64">
+                            {log.userMessage}
+                          </pre>
+                        </div>
+                        <div className="space-y-1">
+                          <div className="font-semibold text-gray-700">アシスタントの回答</div>
+                          <pre className="whitespace-pre-wrap text-[11px] bg-gray-50 rounded p-2 overflow-auto max-h-64">
+                            {log.assistantMessage}
+                          </pre>
+                        </div>
+                      </div>
+                    </details>
+                  )
+                }
 
-              <div className="space-y-2">
-                {filteredChatLogs.map((log) => (
+                // grading
+                const s = e
+                return (
                   <details
-                    key={log.id}
+                    key={`grading-${s.id}`}
                     className="border rounded bg-white text-xs"
                   >
-                    <summary className="px-3 py-2 cursor-pointer flex items-center justify-between gap-3">
-                      <div className="flex flex-col gap-1 min-w-0">
-                        <div className="flex flex-wrap gap-2 items-center">
-                          <span className="font-semibold truncate max-w-[18rem]">
-                            {log.problemTitle || '(問題タイトル未設定)'}
-                          </span>
-                          {log.seatNumber && (
-                            <span className="px-1.5 py-0.5 rounded border bg-gray-50">
-                              座席: {log.seatNumber}
-                            </span>
-                          )}
-                          {log.questionType && (
-                            <span className="px-1.5 py-0.5 rounded border bg-blue-50">
-                              種類: {log.questionType}
-                            </span>
-                          )}
-                          <span
-                            className={`px-1.5 py-0.5 rounded border ${
-                              log.resolved
-                                ? 'bg-emerald-50 border-emerald-300 text-emerald-700'
-                                : 'bg-amber-50 border-amber-300 text-amber-800'
-                            }`}
-                          >
-                            {log.resolved ? '解決' : '未解決'}
-                          </span>
-                        </div>
-                        <div className="text-[11px] text-gray-500 flex flex-wrap gap-2">
-                          <span>{formatDateTime(log.createdAt)}</span>
-                          {typeof log.durationSec === 'number' && (
-                            <span>着席〜質問まで: {secondsToMin(log.durationSec)}</span>
-                          )}
-                        </div>
-                        <div className="text-[11px] text-gray-700 truncate">
-                          {log.userMessage.replace(/\s+/g, ' ').slice(0, 80)}
-                          {log.userMessage.length > 80 && '...'}
-                        </div>
-                      </div>
-                    </summary>
-                    <div className="border-t px-3 py-2 grid grid-cols-1 md:grid-cols-2 gap-3">
-                      <div className="space-y-1">
-                        <div className="font-semibold text-gray-700">学生の質問</div>
-                        <pre className="whitespace-pre-wrap text-[11px] bg-gray-50 rounded p-2 overflow-auto max-h-64">
-                          {log.userMessage}
-                        </pre>
-                      </div>
-                      <div className="space-y-1">
-                        <div className="font-semibold text-gray-700">アシスタントの回答</div>
-                        <pre className="whitespace-pre-wrap text-[11px] bg-gray-50 rounded p-2 overflow-auto max-h-64">
-                          {log.assistantMessage}
-                        </pre>
-                      </div>
-                    </div>
-                  </details>
-                ))}
-              </div>
-            </>
-          )}
-
-          {/* 採点提出一覧（本日分） */}
-          {tab === 'grading' && (
-            <>
-              <div className="flex items-center justify-between mb-1">
-                <h2 className="font-semibold text-sm">採点提出一覧（本日分）</h2>
-                <span className="text-xs text-gray-500">
-                  {subLoading
-                    ? '読み込み中...'
-                    : `表示件数: ${filteredSubmissions.length} 件`}
-                </span>
-              </div>
-
-              {filteredSubmissions.length === 0 && !subLoading && (
-                <div className="text-xs text-gray-500 border rounded p-3 bg-white">
-                  本日分で条件に一致する採点提出がありません。
-                </div>
-              )}
-
-              <div className="space-y-2 text-xs">
-                {filteredSubmissions.map((s) => (
-                  <details key={s.id} className="border rounded bg-white">
                     <summary className="px-3 py-2 cursor-pointer flex items-center justify-between gap-3">
                       <div className="flex flex-col gap-1 min-w-0">
                         <div className="flex flex-wrap items-center gap-2">
                           <span className="font-semibold truncate max-w-[18rem]">
                             {s.problemTitle || '(問題タイトル未設定)'}
+                          </span>
+                          <span className="px-1.5 py-0.5 rounded border bg-green-50 border-green-300 text-green-700">
+                            採点提出
                           </span>
                           {s.seatNumber && (
                             <span className="px-1.5 py-0.5 rounded border bg-gray-50">
@@ -1017,28 +1042,55 @@ export default function TeacherPage() {
                           )}
                           <span>ファイル数: {s.files?.length ?? 0}</span>
                         </div>
+                        {s.gradingResult && (
+                          <div className="text-[11px] text-gray-700 truncate">
+                            {s.gradingResult.replace(/\s+/g, ' ').slice(0, 80)}
+                            {s.gradingResult.length > 80 && '...'}
+                          </div>
+                        )}
                       </div>
                     </summary>
+
                     <div className="border-t px-3 py-2 space-y-2">
+                      {/* ★ 生成AIの出力内容 */}
+                      {s.gradingResult ? (
+                        <div className="space-y-1">
+                          <div className="font-semibold text-gray-700">
+                            生成AIの採点結果
+                          </div>
+                          <pre className="whitespace-pre-wrap text-[11px] bg-gray-50 rounded p-2 overflow-auto max-h-64">
+                            {s.gradingResult}
+                          </pre>
+                        </div>
+                      ) : (
+                        <div className="text-[11px] text-gray-500">
+                          採点結果（gradingResult）が記録されていません。
+                        </div>
+                      )}
+
+                      {/* ファイル一覧 */}
                       {s.files && s.files.length > 0 ? (
-                        <ul className="list-disc pl-5 space-y-1">
-                          {s.files.map((f, i) => (
-                            <li key={i}>
-                              <span className="mr-2">{f.name}</span>
-                              <span className="mr-2 text-gray-500">{f.size}B</span>
-                              {f.downloadURL && (
-                                <a
-                                  href={f.downloadURL}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  className="text-blue-600 underline"
-                                >
-                                  開く
-                                </a>
-                              )}
-                            </li>
-                          ))}
-                        </ul>
+                        <div className="space-y-1">
+                          <div className="font-semibold text-gray-700">提出ファイル</div>
+                          <ul className="list-disc pl-5 space-y-1">
+                            {s.files.map((f, i) => (
+                              <li key={i}>
+                                <span className="mr-2">{f.name}</span>
+                                <span className="mr-2 text-gray-500">{f.size}B</span>
+                                {f.downloadURL && (
+                                  <a
+                                    href={f.downloadURL}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="text-blue-600 underline"
+                                  >
+                                    開く
+                                  </a>
+                                )}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
                       ) : (
                         <div className="text-[11px] text-gray-500">
                           ファイル情報が記録されていません。
@@ -1046,10 +1098,10 @@ export default function TeacherPage() {
                       )}
                     </div>
                   </details>
-                ))}
-              </div>
-            </>
-          )}
+                )
+              })}
+            </div>
+          </section>
         </section>
       </div>
     </main>

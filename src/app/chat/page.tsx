@@ -164,6 +164,28 @@ const BASE_TEACHER_PROMPT = (lang: string) => String.raw`
 - 行頭に必ず「アドバイス:」「質問:」を付け、「コード例:」の直後に \`\`\`${lang} で開始すること。
 `.trim()
 
+/* ================== 抽象化コメント記法ヘルパ（言語非依存） ================== */
+function commentStyle(lang: string) {
+  const l = (lang || '').toLowerCase()
+  if (['python', 'py', 'ruby', 'rb', 'shell', 'sh', 'bash', 'yaml', 'yml', 'toml'].includes(l)) {
+    return { prefix: '#', suffix: '' }
+  }
+  if (['sql'].includes(l)) {
+    return { prefix: '--', suffix: '' }
+  }
+  if (['html', 'xml'].includes(l)) {
+    return { prefix: '<!--', suffix: '-->' }
+  }
+  // デフォルトは C/Java/JS 系
+  return { prefix: '//', suffix: '' }
+}
+
+function asComment(lang: string, text: string) {
+  const { prefix, suffix } = commentStyle(lang)
+  return suffix ? `${prefix} ${text} ${suffix}` : `${prefix} ${text}`
+}
+
+
 // ★ 授業内容（教員が毎回編集するメモ）
 const CURRENT_LESSON_DESCRIPTION = String.raw`
 本日の授業では「配列」「for文／拡張for文」「メソッド定義と呼び出し」などを扱っています。
@@ -184,15 +206,19 @@ const buildAbstractPrompt = (lang: string, snippet: string) => {
 
 【目的】
 - 入力が日本語・英語・その他の言語であっても、抽象的で言語に依存しないテンプレートを作ること。
-- 出力は${shownLang}構文の形を保ちつつ、具体的な識別子や値を \`<～>\` で表現する。
+- 出力は${shownLang}の構文を保ちつつ、学習者が自分で埋めるべき箇所を「TODOコメント穴埋め」で示すこと。
 
 【ルール】
 1. **型（${shownLang}の型表現）はそのまま残す。**
-2. **識別子（クラス名・変数名・フィールド名・メソッド名）はすべて抽象語に置き換える。**
-3. **具体値も抽象化する（文字列/数値など）。**
-4. **コメントは残しつつ抽象語に置換。**
-5. **コンパイル不要（構造理解が目的）。**
-6. **出力は\`${shownLang}\`のコードブロックのみ。**
+2. **識別子（クラス名・変数名・フィールド名・メソッド名）は、<...> を使わず**
+   **ClassA / funcX / value1 のような“汎用で妥当な識別子”に置き換える。**
+3. **具体値（数値/文字列/条件）は <...> にせず、TODOコメントで穴埋めにする。**
+   - 例： ${asComment(shownLang, 'TODO: ここに数値リテラル')} / ${asComment(shownLang, 'TODO: ここに条件')}
+4. **コード冒頭に必ず「抽象化コード例であり完成コードではない」旨の注意コメントを1行入れる。**
+   - 例： ${asComment(shownLang, '【抽象化コード例】完成コードではありません。TODOを埋めてください。')}
+5. **コメントは残しつつ抽象語に置換する。**
+6. **コンパイル不要（構造理解が目的）。**
+7. **出力は\`${shownLang}\`のコードブロックのみ。**
 `.trim()
 
   return String.raw`
@@ -208,8 +234,11 @@ ${snippet || '// (抽出できる部分が見つかりませんでした)'}
 const outputRule = (lang: string) => String.raw`
 【出力形式(再確認)】
 アドバイスは最大5文。具体リテラル禁止。
-コード例は \`\`\`${lang} から。識別子追加や別記法の導入は禁止。
+コード例は \`\`\`${lang} から開始。
+- コード例の先頭に「抽象化コード例」注意コメントを必ず入れること。
+- 抽象箇所は <...> を使わず、TODOコメント穴埋めにすること。
 `.trim()
+
 
 const GRADING_PROMPT = String.raw`
 [役割] 教員として提出コードを採点し、学習者が自分の進捗を数値で把握できるようにする。
@@ -251,16 +280,18 @@ const buildAbstractionRulesForExample = (lang: string) => String.raw`
 
 【目的】
 - 入力が日本語・英語・その他の言語であっても、抽象的で言語に依存しないテンプレートを作ること。
-- 出力は${lang}構文の形を保ちつつ、具体的な識別子や値を \`<～>\` で表現する。
+- 出力は${lang}構文の形を保ちつつ、学習者が自分で埋めるべき箇所を「TODOコメント穴埋め」で示すこと。
 
 【ルール】
 1. **型（${lang}の型表現）はそのまま残す。**
-2. **識別子（クラス名・変数名・フィールド名・メソッド名）はすべて抽象語に置き換える。**
-   - 例: \`Person1\` → \`<ClassA>\`、\`id\` → \`<id>\`、\`score\` → \`<value1>\` など。
-3. **具体値も抽象化する（文字列/数値など）。**
-   - 例: \`"taro"\` → \`"<name>"\`、\`100\` → \`<number1>\` など。
-4. **コメントは残しつつ抽象語に置換する。**
-5. **コンパイル不要（構造理解が目的）。**
+2. **識別子（クラス名・変数名・フィールド名・メソッド名）は <...> を使わず**
+   **ClassA / funcX / value1 のような汎用で妥当な識別子に置き換える。**
+3. **具体値（数値/文字列/条件/閾値/戻り値など）は <...> にしない。**
+   **必ず対象言語のコメント記法で TODO穴埋めにする。**
+   - 例： ${asComment(lang, 'TODO: ここに条件')} / ${asComment(lang, 'TODO: ここに数値')}
+4. **コード例の先頭行に、必ず抽象化テンプレートである注意コメントを入れる。**
+   - 例： ${asComment(lang, '【抽象化コード例】完成コードではありません。TODOを埋めてください。')}
+5. **コメントは残しつつ抽象語に置換する。**
 6. この抽象化は **「コード例:」の中だけ** に適用する。  
    アドバイス文や質問文では、元のクラス名や変数名をそのまま使って説明してよい。
 `.trim()
@@ -1238,6 +1269,7 @@ export default function ChatPage() {
     })
     return true
   }
+
   const updateLastAssistant = (text: string | ((prev: string) => string)) => {
     if (!problem) return
     setAllMessages(prev => {
@@ -1945,28 +1977,32 @@ ${exemplarForPrompt}
 ${filesForPrompt}
 `
 
-    createStreamingAssistant('')
-    try {
-      await streamChat(prompt, (delta) => {
-        updateLastAssistant((prev) => (prev || '') + delta)
-      })
-    } catch (e) {
-      console.error('grading failed', e)
-      updateLastAssistant('採点中にエラーが発生しました。もう一度お試しください。')
-    }
+let fullGradingResult = ''   // ★ 追加：AI出力を溜める
 
-    let saveOk = false
-    try {
-      saveOk = await saveGradingSubmission('')
-    } finally {
-      setLoading(false)
-      setGradingSaving(false)
-      if (saveOk) {
-        setUploads([])
-        setGradingPaste('')
-      }
+createStreamingAssistant('')
+  try {
+    await streamChat(prompt, (delta) => {
+      fullGradingResult += delta            // ★ 追加：deltaを累積
+      updateLastAssistant((prev) => (prev || '') + delta) // 既存の表示更新は維持
+    })
+  } catch (e) {
+    console.error('grading failed', e)
+    updateLastAssistant('採点中にエラーが発生しました。もう一度お試しください。')
+  }
+
+  let saveOk = false
+  try {
+    // ★ 修正：空文字ではなく、溜めた採点結果を保存
+    saveOk = await saveGradingSubmission(fullGradingResult.trim())
+  } finally {
+    setLoading(false)
+    setGradingSaving(false)
+    if (saveOk) {
+      setUploads([])
+      setGradingPaste('')
     }
   }
+}
 
   async function saveGradingSubmission(gradingResult: string): Promise<boolean> {
     if (!problem) return false
