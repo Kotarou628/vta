@@ -1,3 +1,4 @@
+//src\components\ProblemList.tsx
 'use client'
 
 import {
@@ -62,6 +63,9 @@ interface ProblemListProps {
 
   handleUpdate: (id: string) => void
   handleDelete: (id: string) => void
+
+  // ★ 追加: Chat画面表示フラグの切り替え
+  onToggleVisible?: (id: string, next: boolean) => void | Promise<void>
 }
 
 /* ------- 並べ替え1件分 ------- */
@@ -79,6 +83,7 @@ function SortableItem({
   setEditSolutionFiles,
   handleUpdate,
   handleDelete,
+  onToggleVisible,          // ★ 追加
 }: {
   problem: ProblemType
   expandedId: string | null
@@ -93,6 +98,7 @@ function SortableItem({
   setEditSolutionFiles: Dispatch<SetStateAction<SolutionFile[]>>
   handleUpdate: (id: string) => void
   handleDelete: (id: string) => void
+  onToggleVisible?: (id: string, next: boolean) => void | Promise<void> // ★ 追加
 }) {
   const { attributes, listeners, setNodeRef, transform, transition } = useSortable({
     id: problem.id as UniqueIdentifier,
@@ -153,6 +159,9 @@ function SortableItem({
       ? `${problem.solution_files.length} file(s)`
       : (problem.solution_code ? '1 file (legacy)' : 'no answer')
 
+  // ★ visibleInChat は型に無い可能性があるので any 経由で読む
+  const visibleInChat = ((problem as any).visibleInChat as boolean | null | undefined) ?? true
+
   return (
     <li ref={setNodeRef} style={style} className="border p-4 rounded bg-gray-100">
       <div onClick={() => toggleExpand(problem)} className="cursor-pointer">
@@ -160,6 +169,24 @@ function SortableItem({
           <div className="flex flex-col">
             <span className="font-semibold text-lg text-blue-800">{problem.title}</span>
             <span className="text-xs text-gray-500">{fileBadge}</span>
+
+            {/* ★ Chat画面表示フラグのトグル（onToggleVisible が渡されているときだけ表示） */}
+            {onToggleVisible && (
+              <label
+                className="mt-1 inline-flex items-center gap-1 text-xs text-gray-700"
+                onClick={(e) => e.stopPropagation()} // タイトルクリックによる開閉を防ぐ
+              >
+                <input
+                  type="checkbox"
+                  checked={visibleInChat}
+                  onChange={(e) => {
+                    e.stopPropagation()
+                    onToggleVisible(problem.id, e.target.checked)
+                  }}
+                />
+                <span>Chat画面に表示</span>
+              </label>
+            )}
           </div>
           <span
             {...attributes}
@@ -333,6 +360,7 @@ export default function ProblemList(props: ProblemListProps) {
               setEditSolutionFiles={props.setEditSolutionFiles}
               handleUpdate={props.handleUpdate}
               handleDelete={props.handleDelete}
+              onToggleVisible={props.onToggleVisible}  // ★ 追加: 親から渡されたものをそのまま渡す
             />
           ))}
         </ul>

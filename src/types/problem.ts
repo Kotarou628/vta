@@ -31,4 +31,7 @@ export interface Problem {
 
   /** 並び順（任意） */
   order?: number;
+
+  /** Chat画面の問題一覧に表示するかどうか */
+  visibleInChat?: boolean | null;
 }

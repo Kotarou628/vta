@@ -69,6 +69,16 @@ type StudentSeat = {
   updatedAt?: Timestamp | null
 }
 
+// ★ 質問タイプ → 日本語ラベル
+const QUESTION_TYPE_LABEL: Record<QuestionType, string> = {
+  error: 'エラー・例外の相談',
+  syntax: '書き方の相談',
+  review: 'コードレビュー・バグの相談',
+  algo: 'アルゴリズム・理論の相談',
+  free: '自由記述の相談',
+  unknown: '（種類未入力）',
+}
+
 const getStartOfTodayLocal = (): Date => {
   const now = new Date()
   return new Date(now.getFullYear(), now.getMonth(), now.getDate())
@@ -193,6 +203,11 @@ export default function TeacherPage() {
 
   // ★ デバッグ用: クリックされた座席ID
   const [debugSeatId, setDebugSeatId] = useState<string | null>(null)
+
+  // ★ 座席履歴表示用: クリックされた座席のログだけを絞り込むフィルタ
+  const [selectedSeatForHistory, setSelectedSeatForHistory] = useState<string | null>(
+    null
+  )
 
   // 問題タイトル一覧（フィルタ用）
   const [problemOptions, setProblemOptions] = useState<
@@ -389,7 +404,7 @@ export default function TeacherPage() {
     return () => unsub()
   }, [])
 
-  // フィルタ適用後のチャットログ（★選択日分のみ）
+  // フィルタ適用後のチャットログ（★選択日分のみ＋座席フィルタ）
   const filteredChatLogs = useMemo(() => {
     return chatLogs.filter((log) => {
       if (!isSameDay(log.createdAt, selectedDayMs)) return false
@@ -401,6 +416,13 @@ export default function TeacherPage() {
         return false
       if (resolvedFilter === 'resolved' && !log.resolved) return false
       if (resolvedFilter === 'unresolved' && log.resolved) return false
+
+      // ★ 座席フィルタ（履歴表示用）
+      if (selectedSeatForHistory) {
+        const seat = (log.seatNumber ?? '').toUpperCase()
+        if (seat !== selectedSeatForHistory) return false
+      }
+
       return true
     })
   }, [
@@ -409,16 +431,24 @@ export default function TeacherPage() {
     questionTypeFilter,
     resolvedFilter,
     selectedDayMs,
+    selectedSeatForHistory,
   ])
 
-  // フィルタ適用後の submissions（★選択日分のみ）
+  // フィルタ適用後の submissions（★選択日分のみ＋座席フィルタ）
   const filteredSubmissions = useMemo(() => {
     return submissions.filter((s) => {
       if (!isSameDay(s.submittedAt, selectedDayMs)) return false
       if (problemFilter !== 'all' && s.problemId !== problemFilter) return false
+
+      // ★ 座席フィルタ（履歴表示用）
+      if (selectedSeatForHistory) {
+        const seat = (s.seatNumber ?? '').toUpperCase()
+        if (seat !== selectedSeatForHistory) return false
+      }
+
       return true
     })
-  }, [submissions, problemFilter, selectedDayMs])
+  }, [submissions, problemFilter, selectedDayMs, selectedSeatForHistory])
 
   // ★ チャット + 採点提出 を 1つの時系列ログに統合（★選択日）
   const unifiedEntries: UnifiedEntry[] = useMemo(() => {
@@ -514,7 +544,7 @@ export default function TeacherPage() {
     return m
   }, [chatLogs, nowMs])
 
-  // ★ デバッグ用: 選択中座席の情報まとめ
+  // ★ デバッグ用: 選択中座席の情報まとめ（UI 側はコメントアウト）
   const debugSeatInfo = debugSeatId ? studentSeatMap.get(debugSeatId) : undefined
   const debugLatestAny = debugSeatId
     ? seatLatestAnyProblemMap.get(debugSeatId)
@@ -638,12 +668,12 @@ export default function TeacherPage() {
               onChange={(e) => setQuestionTypeFilter(e.target.value as any)}
             >
               <option value="all">すべて</option>
-              <option value="error">エラー・例外</option>
-              <option value="syntax">文法・書き方</option>
-              <option value="review">コードレビュー</option>
-              <option value="algo">理論・アルゴリズム</option>
-              <option value="free">自由記述</option>
-              <option value="unknown">不明</option>
+              <option value="error">エラー・例外の相談</option>
+              <option value="syntax">書き方の相談</option>
+              <option value="review">コードレビュー・バグの相談</option>
+              <option value="algo">アルゴリズム・理論の相談</option>
+              <option value="free">自由記述の相談</option>
+              <option value="unknown">（種類未入力）</option>
             </select>
           </div>
 
@@ -687,7 +717,6 @@ export default function TeacherPage() {
                   <span>30分以上</span>
                 </span>
                 <span className="flex items-center gap-1">
-                  <span className="inline-block w-3 h-3 border bg-rose-200" />
                   <span>👋TA呼び出し中</span>
                 </span>
               </div>
@@ -847,11 +876,27 @@ export default function TeacherPage() {
                             bgClass = 'bg-rose-200 border-rose-500'
                           }
 
+                          const isSelectedSeat = selectedSeatForHistory === seatId
+
                           return (
                             <div
                               key={seatId}
-                              className={`flex flex-col items-center justify-center h-14 border ${bgClass}`}
-                              onClick={() => setDebugSeatId(seatId)}
+                              className={`flex flex-col items-center justify-center h-14 border ${bgClass} ${
+                                isSelectedSeat ? 'ring-2 ring-blue-400 ring-offset-1' : ''
+                              }`}
+                              onClick={() => {
+                                // ★ 同じ座席をもう一度クリック → フィルタ解除
+                                if (selectedSeatForHistory === seatId) {
+                                  setSelectedSeatForHistory(null)
+                                } else {
+                                  // ★ クリックした座席の履歴だけを下のログ一覧に表示
+                                  setSelectedSeatForHistory(seatId)
+                                  // ★ ログ一覧の日付は「今日」に合わせる（座席ビューは本日固定のため）
+                                  setLogDateYMD(getTodayYMDLocal())
+                                }
+                                // ★ デバッグ用 ID は残しておくが、UI 側はコメントアウト済み
+                                setDebugSeatId(seatId)
+                              }}
                             >
                               <div className="text-[11px] font-semibold flex items-center gap-1">
                                 <span>{seatId}</span>
@@ -885,10 +930,12 @@ export default function TeacherPage() {
               ・本日の履歴のみを対象としています（前日以前のデータは座席ビューには表示されません）。<br />
               ・問題フィルタ「すべて」のとき：各座席の本日分の問題タイトルと経過時間を表示します。<br />
               ・特定の問題でフィルタしたとき：その問題に取り組んでいる座席だけを表示し、経過時間で色分けします。<br />
-              ・チャット／採点／座席情報は Firestore の変更をリアルタイムで反映します。
+              ・チャット／採点／座席情報は Firestore の変更をリアルタイムで反映します。<br />
+              ・座席をクリックすると、その座席のログだけが下の「ログ一覧」に表示されます（もう一度クリックすると全体表示に戻ります）。
             </div>
 
-            {/* ★ デバッグパネル */}
+            {/* ★ デバッグパネル（一般利用では非表示。必要なときだけコメントアウトを外す） */}
+            {/*
             {debugSeatId && (
               <div className="mt-2 border-t pt-2 text-[10px] text-gray-700">
                 <div className="flex items-center justify-between mb-1">
@@ -921,20 +968,40 @@ export default function TeacherPage() {
                 </div>
               </div>
             )}
+            */}
           </section>
 
           {/* ★ 統合ログ一覧（選択日分） */}
           <section className="space-y-2">
-            <div className="flex items-center justify-between mb-1">
+            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2 mb-1">
               <h2 className="font-semibold text-sm">
                 ログ一覧（選択日: {logDateYMD}・チャット＋採点提出）
               </h2>
-              <span className="text-xs text-gray-500">
-                {anyLoading
-                  ? '読み込み中...'
-                  : `合計: ${unifiedEntries.length} 件（チャット ${filteredChatLogs.length} / 採点 ${filteredSubmissions.length}）`}
-              </span>
+              <div className="flex flex-col items-start md:items-end gap-1 text-xs text-gray-500">
+                <span>
+                  {anyLoading
+                    ? '読み込み中...'
+                    : `合計: ${unifiedEntries.length} 件（チャット ${filteredChatLogs.length} / 採点 ${filteredSubmissions.length}）`}
+                </span>
+              </div>
             </div>
+
+            {/* ★ 座席フィルタ中の目立つバー＋解除ボタン */}
+            {selectedSeatForHistory && (
+              <div className="mb-2 flex items-center justify-between border rounded bg-blue-50 px-3 py-1 text-[11px] text-blue-900">
+                <span>
+                  座席{' '}
+                  <span className="font-semibold">{selectedSeatForHistory}</span>{' '}
+                  のログのみ表示しています。もう一度座席をクリックすると全体表示に戻ります。
+                </span>
+                <button
+                  className="border border-blue-400 rounded px-2 py-0.5 bg-white text-blue-700 hover:bg-blue-50"
+                  onClick={() => setSelectedSeatForHistory(null)}
+                >
+                  フィルタ解除
+                </button>
+              </div>
+            )}
 
             {unifiedEntries.length === 0 && !anyLoading && (
               <div className="text-xs text-gray-500 border rounded p-3 bg-white">
@@ -946,6 +1013,9 @@ export default function TeacherPage() {
               {unifiedEntries.map((e) => {
                 if (e.kind === 'chat') {
                   const log = e
+                  const qtLabel =
+                    QUESTION_TYPE_LABEL[log.questionType ?? 'unknown']
+
                   return (
                     <details
                       key={`chat-${log.id}`}
@@ -967,7 +1037,7 @@ export default function TeacherPage() {
                             )}
                             {log.questionType && (
                               <span className="px-1.5 py-0.5 rounded border bg-blue-50">
-                                種類: {log.questionType}
+                                種類: {qtLabel}
                               </span>
                             )}
                             <span
@@ -1031,9 +1101,7 @@ export default function TeacherPage() {
                               座席: {s.seatNumber}
                             </span>
                           )}
-                          <span className="px-1.5 py-0.5 rounded border bg-emerald-50">
-                            モード: {s.inputMode ?? s.mode}
-                          </span>
+                          {/* 種別・入力方法のタグは表示しない（内部的には保持） */}
                         </div>
                         <div className="text-[11px] text-gray-500 flex flex-wrap gap-2">
                           <span>{formatDateTime(s.submittedAt)}</span>

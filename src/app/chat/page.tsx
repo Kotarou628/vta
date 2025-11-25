@@ -245,7 +245,7 @@ const GRADING_PROMPT = String.raw`
 [比較] 模範コードと学生コードを比較し、満たせている要件/未達の要件を抽出。
 [出力]
 1) 完成度: XX%（根拠を短く）
-2) 未達/不正確: 最大5点
+2) 未達/不正確: 箇条書きで3〜5点
 3) 次の一手: 1〜3点
 [禁止]
 - エラーメッセージの解説
@@ -369,9 +369,19 @@ type Message = {
   mode?: 'normal' | 'grading'
   questionType?: QuestionTypeForLog
   isNudge?: boolean
+  isAbstractTemplate?: boolean
 }
 type ProblemFile = { filename: string; code: string; language?: string }
-type Problem = { id: string; title: string; description: string; solution_files: ProblemFile[] }
+
+// ★ Chat画面用に visibleInChat を追加
+type Problem = {
+  id: string
+  title: string
+  description: string
+  solution_files: ProblemFile[]
+  visibleInChat?: boolean        // ← これを追加
+}
+
 
 /* ===== モード説明文 ===== */
 function describeQuestionMode(q: QuestionTypeForLog): string {
@@ -549,6 +559,18 @@ function prettyCodeAuto(code: string): string {
     if (/[{]$/.test(t)) depth++
   }
   return out.join('\n').replace(/\s+\n/g, '\n')
+}
+
+/** 抽象化コードであることを先頭コメントで明示する（すでに入っていれば何もしない） */
+function ensureAbstractComment(code: string): string {
+  const trimmed = code.trimStart()
+  // すでに「抽象化コード例」系のコメントが入っていればそのまま
+  if (/抽象化コード例|抽象化テンプレート/.test(trimmed)) {
+    return code
+  }
+  const lang = detectLang(code)
+  const comment = asComment(lang, '【抽象化コード例】完成コードではありません。TODOを埋めてください。')
+  return `${comment}\n${code}`
 }
 
 /* ===== 言語推定 ===== */
@@ -807,6 +829,7 @@ export default function ChatPage() {
   const [loading, setLoading] = useState(false)
   const [problems, setProblems] = useState<Problem[]>([])
   const [problem, setProblem] = useState<Problem | null>(null)
+  const visibleProblems = useMemo<Problem[]>(() => problems, [problems])
 
   // 通常 / 採点モード
   const [gradingMode, setGradingMode] = useState(false)
@@ -1016,7 +1039,14 @@ export default function ChatPage() {
   useEffect(() => {
     const saved = localStorage.getItem('chatMessages')
     if (saved) setAllMessages(JSON.parse(saved))
-    fetch('/api/problem').then((res) => res.json()).then(setProblems)
+
+    fetch('/api/problem')
+      .then((res) => res.json())
+      .then((data: Problem[]) => {
+        // ★ Chat表示フラグが true（または未設定）のものだけに絞る
+        const visible = data.filter((p) => p.visibleInChat ?? true)
+        setProblems(visible)
+      })
   }, [])
   useEffect(() => {
     localStorage.setItem('chatMessages', JSON.stringify(allMessages))
@@ -1261,11 +1291,26 @@ export default function ChatPage() {
   }, [loading, pendingNudges, problem])
 
   // ストリーミング更新
-  const createStreamingAssistant = (initial = '') => {
+  const createStreamingAssistant = (
+    initial = '',
+    options?: { isAbstractTemplate?: boolean }
+  ) => {
     if (!problem) return null
+    const { isAbstractTemplate = false } = options || {}
+
     setAllMessages(prev => {
       const cur = prev[problem.id] || []
-      return { ...prev, [problem.id]: [...cur, { role: 'assistant', content: initial }] }
+      return {
+        ...prev,
+        [problem.id]: [
+          ...cur,
+          {
+            role: 'assistant' as const,
+            content: initial,
+            ...(isAbstractTemplate ? { isAbstractTemplate: true } : {}),
+          },
+        ],
+      }
     })
     return true
   }
@@ -1685,16 +1730,23 @@ ${summary}
 【学生の相談内容】
 ${userContent}
 `
-    } else {
+} else {
       // 🟦 文法・書き方 / 🟨 理論・アルゴリズム
-      // → 問題文・模範コードは送らず、変数名を変えるルール＋禁止識別子リストを追加
+      // → 問題文（あなたの修正済み）＋変数名を変えるルール＋禁止識別子リスト＋抽象化ルールを追加
       const bannedIdList = extractIdentifiersFromSolutionFiles(problem.solution_files || [])
       const bannedSection = bannedIdList.length
         ? `\n【禁止識別子リスト（重要）】
 以下の名前は現在の課題の模範コードで使われています。これらと同じ名前を新しく出すコード例に使ってはいけません：
 ${bannedIdList.join(', ')}
+
+【今回扱っている問題】
+${problem.title}
+${problem.description}
 `
         : ''
+
+      // ★追加：文法/アルゴ用のコード例も抽象化テンプレートに従わせる
+      const abstractionRules = buildAbstractionRulesForExample(lang)
 
       promptForLLM = String.raw`${BASE_TEACHER_PROMPT(lang)}
 
@@ -1715,12 +1767,25 @@ ${userContent}
 - 正解コード全体や、そのまま提出すると通ってしまう完成コードは出さないでください。
 - あくまで「考え方」と「部分的なコード例」にとどめてください。
 ${bannedSection}
+
+【コード例の抽象化ルール】
+${abstractionRules}
+
 ${outputRule(lang)}`
     }
 
+
     // 3. 1回の呼び出しでストリーミング表示
     setLoading(true)
-    createStreamingAssistant('')
+
+    // ★ この質問タイプの回答コードは抽象化テンプレート扱いにする
+    const isAbstract =
+      qType === 'error' ||
+      qType === 'review' ||
+      qType === 'syntax' ||
+      qType === 'algo'
+
+    createStreamingAssistant('', { isAbstractTemplate: isAbstract })
 
     try {
       await streamChat(promptForLLM, (delta) => {
@@ -2094,16 +2159,18 @@ createStreamingAssistant('')
       <main className="flex h-screen">
         {/* 左：問題リスト */}
         <div className="w-1/3 bg-gray-50 border-r p-4 overflow-y-auto">
-          <h2 className="font-bold mb-2">問題を選択</h2>
-          {problems.map((p) => (
-            <button
-              key={p.id}
-              onClick={() => handleSelectProblem(p)}
-              className={`block w-full text-left p-2 mb-2 rounded ${problem?.id === p.id ? 'bg-blue-100' : 'hover:bg-blue-50'}`}
-            >
-              {p.title}
-            </button>
-          ))}
+        <h2 className="font-bold.mb-2">問題を選択</h2>
+        {visibleProblems.map((p) => (
+          <button
+            key={p.id}
+            onClick={() => handleSelectProblem(p)}
+            className={`block w-full text-left p-2 mb-2 rounded ${
+              problem?.id === p.id ? 'bg-blue-100' : 'hover:bg-blue-50'
+            }`}
+          >
+            {p.title}
+          </button>
+        ))}
           <div className="mt-4 border-t pt-3">
             <h3 className="font-semibold text-sm text-gray-700 mb-2">選択中の問題</h3>
             {problem ? (
@@ -2188,33 +2255,41 @@ createStreamingAssistant('')
                     msg.role === 'user' ? 'bg-blue-100' : 'bg-green-50'
                   }`}
                 >
-                  {(() => {
-                    const parts = (() => {
-                      const regex = /```(?:[a-zA-Z0-9#+-]*)?\n([\s\S]*?)```/g
-                      const res: (string | { code: string })[] = []
-                      let last = 0
-                      let m: RegExpExecArray | null
-                      while ((m = regex.exec(msg.content))) {
-                        if (m.index > last) res.push(msg.content.slice(last, m.index))
-                        res.push({ code: prettyCodeAuto(m[1] ?? '') })
-                        last = regex.lastIndex
+                {(() => {
+                  const parts = (() => {
+                    const regex = /```(?:[a-zA-Z0-9#+-]*)?\n([\s\S]*?)```/g
+                    const res: (string | { code: string })[] = []
+                    let last = 0
+                    let m: RegExpExecArray | null
+                    while ((m = regex.exec(msg.content))) {
+                      if (m.index > last) res.push(msg.content.slice(last, m.index))
+
+                      let rawCode = m[1] ?? ''
+
+                      // ★ 抽象化テンプレート用のメッセージなら、先頭に注意コメントを差し込む
+                      if (msg.role === 'assistant' && msg.isAbstractTemplate) {
+                        rawCode = ensureAbstractComment(rawCode)
                       }
-                      if (last < msg.content.length) res.push(msg.content.slice(last))
-                      return res
-                    })()
-                    return parts.map((p, i) =>
-                      typeof p === 'string' ? (
-                        <p key={i}>{p}</p>
-                      ) : (
-                        <pre
-                          key={i}
-                          className="bg-gray-200 p-2 rounded overflow-x-auto text-sm"
-                        >
-                          <code>{p.code}</code>
-                        </pre>
-                      )
+
+                      res.push({ code: prettyCodeAuto(rawCode) })
+                      last = regex.lastIndex
+                    }
+                    if (last < msg.content.length) res.push(msg.content.slice(last))
+                    return res
+                  })()
+                  return parts.map((p, i) =>
+                    typeof p === 'string' ? (
+                      <p key={i}>{p}</p>
+                    ) : (
+                      <pre
+                        key={i}
+                        className="bg-gray-200 p-2 rounded overflow-x-auto text-sm"
+                      >
+                        <code>{p.code}</code>
+                      </pre>
                     )
-                  })()}
+                  )
+                })()}
                 </div>
               )
 
