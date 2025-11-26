@@ -33,7 +33,7 @@ const normalizeSeat = (raw: string) => {
 };
 
 /** A〜N + 01〜08 を許可（座席表に合わせる） */
-const isValidSeat = (seat: string) => /^[A-N](0[1-8])$/.test(seat);
+const isValidSeat = (seat: string) => /^[A-O](0[1-7])$/.test(seat);
 
 
 /** ローカル保存（chat ページの互換維持） */
@@ -107,7 +107,7 @@ export default function LoginPage() {
 
     if (!isValidSeat(seatNormalized)) {
       setLoading(false);
-      setError('席番号は A01〜N08 の形式で入力してください。（例: K05 / M02）');
+      setError('席番号は A02〜O07 の形式で入力してください。（例: K05 / M02）');
       return;
     }
     
