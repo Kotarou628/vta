@@ -1,7 +1,7 @@
 // src/app/teacher/page.tsx
 'use client'
 
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useState, useRef } from 'react'
 import {
   collection,
   getDocs,
@@ -233,6 +233,11 @@ export default function TeacherPage() {
     return () => clearInterval(id)
   }, [])
 
+  // ★ 座席ビューのスケール制御用
+  const seatOuterRef = useRef<HTMLDivElement | null>(null)
+  const seatInnerRef = useRef<HTMLDivElement | null>(null)
+  const [seatScale, setSeatScale] = useState(1)
+
   // ★ 選択日（ログ一覧用）の ms
   const selectedDayMs = useMemo(() => {
     const ms = dateMsFromYMDLocalNoon(logDateYMD)
@@ -403,6 +408,43 @@ export default function TeacherPage() {
 
     return () => unsub()
   }, [])
+
+  // ★ 座席ビューのスケール計算（画面幅に合わせて縮小）
+  useEffect(() => {
+    const outer = seatOuterRef.current
+    const inner = seatInnerRef.current
+    if (!outer || !inner) return
+
+    const updateScale = () => {
+      if (!seatOuterRef.current || !seatInnerRef.current) return
+      const outerWidth = seatOuterRef.current.clientWidth
+      if (outerWidth <= 0) {
+        setSeatScale(1)
+        return
+      }
+      // 一旦スケール1に戻して本来の幅を測る
+      seatInnerRef.current.style.transform = 'scale(1)'
+      const innerWidth = seatInnerRef.current.scrollWidth
+      if (innerWidth <= 0) {
+        setSeatScale(1)
+        return
+      }
+      const ratio = outerWidth / innerWidth
+      const nextScale = ratio < 1 ? ratio : 1 // 縮小のみ。拡大はしない
+      setSeatScale(nextScale)
+    }
+
+    updateScale()
+
+    const ro = new ResizeObserver(() => {
+      updateScale()
+    })
+    ro.observe(outer)
+
+    return () => {
+      ro.disconnect()
+    }
+  }, [students.length, problemFilter])
 
   // フィルタ適用後のチャットログ（★選択日分のみ＋座席フィルタ）
   const filteredChatLogs = useMemo(() => {
@@ -722,207 +764,222 @@ export default function TeacherPage() {
               </div>
             </div>
 
-            <div className="flex flex-col items-center gap-3">
-              <div className="mt-1 mb-1 px-6 py-1 border text-[11px] text-center">
-                教卓
-              </div>
+            {/* ★ 座席ビュー全体をスケールさせるラッパー */}
+            <div
+              ref={seatOuterRef}
+              className="w-full flex justify-center overflow-hidden"
+            >
+              <div
+                ref={seatInnerRef}
+                className="flex flex-col items-center gap-3 origin-top"
+                style={{ transform: `scale(${seatScale})` }}
+              >
+                <div className="mt-1 mb-1 px-6 py-1 border text-[11px] text-center">
+                  教卓
+                </div>
 
-              <div className="flex flex-wrap gap-6 justify-center">
-                {seatBlocks.map((block) => {
-                  const offsetClass =
-                    block.id === 'left' || block.id === 'farRight' ? 'mt-14' : ''
+                <div className="flex flex-wrap gap-6 justify-center">
+                  {seatBlocks.map((block) => {
+                    const offsetClass =
+                      block.id === 'left' || block.id === 'farRight' ? 'mt-14' : ''
 
-                  return (
-                    <div
-                      key={block.id}
-                      className={`grid gap-px border bg-gray-200 ${offsetClass}`}
-                      style={{
-                        gridTemplateColumns: `repeat(${block.cols.length}, 4rem)`,
-                      }}
-                    >
-                      {block.rows.map((row) =>
-                        block.cols.map((col) => {
-                          const seatId = `${col}${row}`
+                    return (
+                      <div
+                        key={block.id}
+                        className={`grid gap-px border bg-gray-200 ${offsetClass}`}
+                        style={{
+                          gridTemplateColumns: `repeat(${block.cols.length}, 4rem)`,
+                        }}
+                      >
+                        {block.rows.map((row) =>
+                          block.cols.map((col) => {
+                            const seatId = `${col}${row}`
 
-                          const seatInfo = studentSeatMap.get(seatId)
-                          const latestAny = seatLatestAnyProblemMap.get(seatId)
+                            const seatInfo = studentSeatMap.get(seatId)
+                            const latestAny = seatLatestAnyProblemMap.get(seatId)
 
-                          const currentProblemId =
-                            seatInfo?.currentProblemId ??
-                            latestAny?.problemId ??
-                            null
+                            const currentProblemId =
+                              seatInfo?.currentProblemId ??
+                              latestAny?.problemId ??
+                              null
 
-                          const latestForCurrent =
-                            currentProblemId != null
-                              ? seatProblemLatestMap.get(
-                                  `${seatId}__${currentProblemId}`
+                            const latestForCurrent =
+                              currentProblemId != null
+                                ? seatProblemLatestMap.get(
+                                    `${seatId}__${currentProblemId}`
+                                  )
+                                : undefined
+
+                            const problemId = currentProblemId
+                            const title =
+                              seatInfo?.currentProblemTitle ??
+                              latestForCurrent?.title ??
+                              latestAny?.title ??
+                              ''
+
+                            let minutesToday: number | null = null
+
+                            const startedTs =
+                              seatInfo?.timerStartedAt ??
+                              seatInfo?.startedAt ??
+                              seatInfo?.updatedAt ??
+                              null
+
+                            let elapsedSecByTimer: number | null = null
+                            const baseSec =
+                              typeof seatInfo?.timerBaseSec === 'number'
+                                ? seatInfo.timerBaseSec
+                                : 0
+
+                            if (baseSec > 0 || seatInfo?.timerRunning) {
+                              let sec = baseSec
+                              if (seatInfo?.timerRunning && seatInfo.timerResumedAt) {
+                                const resumedMs =
+                                  seatInfo.timerResumedAt.toDate().getTime()
+                                const diffSec = Math.max(
+                                  0,
+                                  Math.floor((nowMs - resumedMs) / 1000)
                                 )
-                              : undefined
-
-                          const problemId = currentProblemId
-                          const title =
-                            seatInfo?.currentProblemTitle ??
-                            latestForCurrent?.title ??
-                            latestAny?.title ??
-                            ''
-
-                          let minutesToday: number | null = null
-
-                          const startedTs =
-                            seatInfo?.timerStartedAt ??
-                            seatInfo?.startedAt ??
-                            seatInfo?.updatedAt ??
-                            null
-
-                          let elapsedSecByTimer: number | null = null
-                          const baseSec =
-                            typeof seatInfo?.timerBaseSec === 'number'
-                              ? seatInfo.timerBaseSec
-                              : 0
-
-                          if (baseSec > 0 || seatInfo?.timerRunning) {
-                            let sec = baseSec
-                            if (seatInfo?.timerRunning && seatInfo.timerResumedAt) {
-                              const resumedMs =
-                                seatInfo.timerResumedAt.toDate().getTime()
-                              const diffSec = Math.max(
-                                0,
-                                Math.floor((nowMs - resumedMs) / 1000)
-                              )
-                              sec += diffSec
+                                sec += diffSec
+                              }
+                              elapsedSecByTimer = sec
                             }
-                            elapsedSecByTimer = sec
-                          }
 
-                          const isTodayByTimer =
-                            (startedTs && isSameDay(startedTs, nowMs)) ||
-                            (seatInfo?.timerResumedAt &&
-                              isSameDay(seatInfo.timerResumedAt, nowMs))
+                            const isTodayByTimer =
+                              (startedTs && isSameDay(startedTs, nowMs)) ||
+                              (seatInfo?.timerResumedAt &&
+                                isSameDay(seatInfo.timerResumedAt, nowMs))
 
-                          if (elapsedSecByTimer != null && isTodayByTimer) {
-                            minutesToday = Math.floor(elapsedSecByTimer / 60)
-                          }
+                            if (elapsedSecByTimer != null && isTodayByTimer) {
+                              minutesToday = Math.floor(elapsedSecByTimer / 60)
+                            }
 
-                          if (minutesToday == null) {
-                            if (
+                            if (minutesToday == null) {
+                              if (
+                                latestForCurrent?.createdAt &&
+                                isSameDay(latestForCurrent.createdAt, nowMs) &&
+                                typeof latestForCurrent.durationSec === 'number'
+                              ) {
+                                minutesToday = Math.floor(
+                                  latestForCurrent.durationSec / 60
+                                )
+                              }
+                            }
+
+                            if (minutesToday == null && startedTs) {
+                              if (isSameDay(startedTs, nowMs)) {
+                                minutesToday = diffMinutesFromNow(startedTs, nowMs)
+                              }
+                            }
+
+                            const matchesFilter =
+                              problemFilter === 'all' ||
+                              (problemId && problemId === problemFilter)
+
+                            let bgClass =
+                              matchesFilter && minutesToday != null
+                                ? seatBgClassByMinutes(minutesToday)
+                                : 'bg-white'
+
+                            let mainLine = title
+                            let subLine =
+                              matchesFilter && minutesToday != null
+                                ? `${minutesToday}分経過`
+                                : ''
+
+                            let taLine = seatInfo?.taRequested ? 'TA呼び出し中' : ''
+
+                            let isTodaySeat = false
+                            if (isTodayByTimer) {
+                              isTodaySeat = true
+                            } else if (
                               latestForCurrent?.createdAt &&
-                              isSameDay(latestForCurrent.createdAt, nowMs) &&
-                              typeof latestForCurrent.durationSec === 'number'
+                              isSameDay(latestForCurrent.createdAt, nowMs)
                             ) {
-                              minutesToday = Math.floor(
-                                latestForCurrent.durationSec / 60
-                              )
+                              isTodaySeat = true
+                            } else if (
+                              latestAny?.createdAt &&
+                              isSameDay(latestAny.createdAt, nowMs)
+                            ) {
+                              isTodaySeat = true
+                            } else if (
+                              seatInfo?.updatedAt &&
+                              isSameDay(seatInfo.updatedAt, nowMs)
+                            ) {
+                              isTodaySeat = true
                             }
-                          }
 
-                          if (minutesToday == null && startedTs) {
-                            if (isSameDay(startedTs, nowMs)) {
-                              minutesToday = diffMinutesFromNow(startedTs, nowMs)
+                            if (!isTodaySeat) {
+                              mainLine = ''
+                              subLine = ''
+                              taLine = ''
+                              minutesToday = null
+                              bgClass = 'bg-white'
                             }
-                          }
 
-                          const matchesFilter =
-                            problemFilter === 'all' ||
-                            (problemId && problemId === problemFilter)
+                            if (problemFilter !== 'all' && !matchesFilter) {
+                              mainLine = ''
+                              subLine = ''
+                              taLine = ''
+                            }
 
-                          let bgClass =
-                            matchesFilter && minutesToday != null
-                              ? seatBgClassByMinutes(minutesToday)
-                              : 'bg-white'
+                            if (seatInfo?.taRequested && isTodaySeat) {
+                              bgClass = 'bg-rose-200 border-rose-500'
+                            }
 
-                          let mainLine = title
-                          let subLine =
-                            matchesFilter && minutesToday != null
-                              ? `${minutesToday}分経過`
-                              : ''
+                            const isSelectedSeat =
+                              selectedSeatForHistory === seatId
 
-                          let taLine = seatInfo?.taRequested ? 'TA呼び出し中' : ''
-
-                          let isTodaySeat = false
-                          if (isTodayByTimer) {
-                            isTodaySeat = true
-                          } else if (
-                            latestForCurrent?.createdAt &&
-                            isSameDay(latestForCurrent.createdAt, nowMs)
-                          ) {
-                            isTodaySeat = true
-                          } else if (
-                            latestAny?.createdAt &&
-                            isSameDay(latestAny.createdAt, nowMs)
-                          ) {
-                            isTodaySeat = true
-                          } else if (
-                            seatInfo?.updatedAt &&
-                            isSameDay(seatInfo.updatedAt, nowMs)
-                          ) {
-                            isTodaySeat = true
-                          }
-
-                          if (!isTodaySeat) {
-                            mainLine = ''
-                            subLine = ''
-                            taLine = ''
-                            minutesToday = null
-                            bgClass = 'bg-white'
-                          }
-
-                          if (problemFilter !== 'all' && !matchesFilter) {
-                            mainLine = ''
-                            subLine = ''
-                            taLine = ''
-                          }
-
-                          if (seatInfo?.taRequested && isTodaySeat) {
-                            bgClass = 'bg-rose-200 border-rose-500'
-                          }
-
-                          const isSelectedSeat = selectedSeatForHistory === seatId
-
-                          return (
-                            <div
-                              key={seatId}
-                              className={`flex flex-col items-center justify-center h-14 border ${bgClass} ${
-                                isSelectedSeat ? 'ring-2 ring-blue-400 ring-offset-1' : ''
-                              }`}
-                              onClick={() => {
-                                // ★ 同じ座席をもう一度クリック → フィルタ解除
-                                if (selectedSeatForHistory === seatId) {
-                                  setSelectedSeatForHistory(null)
-                                } else {
-                                  // ★ クリックした座席の履歴だけを下のログ一覧に表示
-                                  setSelectedSeatForHistory(seatId)
-                                  // ★ ログ一覧の日付は「今日」に合わせる（座席ビューは本日固定のため）
-                                  setLogDateYMD(getTodayYMDLocal())
-                                }
-                                // ★ デバッグ用 ID は残しておくが、UI 側はコメントアウト済み
-                                setDebugSeatId(seatId)
-                              }}
-                            >
-                              <div className="text-[11px] font-semibold flex items-center gap-1">
-                                <span>{seatId}</span>
-                                {seatInfo?.taRequested && isTodaySeat && <span>👋</span>}
-                              </div>
-
-                              <div className="text-[10px] text-center px-1 truncate w-full">
-                                {mainLine || ''}
-                              </div>
-
-                              <div className="text-[10px] text-center text-gray-700">
-                                {subLine}
-                              </div>
-
-                              {taLine && (
-                                <div className="text-[10px] text-center text-rose-700 font-semibold">
-                                  {taLine}
+                            return (
+                              <div
+                                key={seatId}
+                                className={`flex flex-col items-center justify-center h-14 border ${bgClass} ${
+                                  isSelectedSeat
+                                    ? 'ring-2 ring-blue-400 ring-offset-1'
+                                    : ''
+                                }`}
+                                onClick={() => {
+                                  // ★ 同じ座席をもう一度クリック → フィルタ解除
+                                  if (selectedSeatForHistory === seatId) {
+                                    setSelectedSeatForHistory(null)
+                                  } else {
+                                    // ★ クリックした座席の履歴だけを下のログ一覧に表示
+                                    setSelectedSeatForHistory(seatId)
+                                    // ★ ログ一覧の日付は「今日」に合わせる（座席ビューは本日固定のため）
+                                    setLogDateYMD(getTodayYMDLocal())
+                                  }
+                                  // ★ デバッグ用 ID は残しておくが、UI 側はコメントアウト済み
+                                  setDebugSeatId(seatId)
+                                }}
+                              >
+                                <div className="text-[11px] font-semibold flex items-center gap-1">
+                                  <span>{seatId}</span>
+                                  {seatInfo?.taRequested && isTodaySeat && (
+                                    <span>👋</span>
+                                  )}
                                 </div>
-                              )}
-                            </div>
-                          )
-                        })
-                      )}
-                    </div>
-                  )
-                })}
+
+                                <div className="text-[10px] text-center px-1 truncate w-full">
+                                  {mainLine || ''}
+                                </div>
+
+                                <div className="text-[10px] text-center text-gray-700">
+                                  {subLine}
+                                </div>
+
+                                {taLine && (
+                                  <div className="text-[10px] text-center text-rose-700 font-semibold">
+                                    {taLine}
+                                  </div>
+                                )}
+                              </div>
+                            )
+                          })
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
               </div>
             </div>
 
@@ -935,7 +992,7 @@ export default function TeacherPage() {
             </div>
 
             {/* ★ デバッグパネル（一般利用では非表示。必要なときだけコメントアウトを外す） */}
-            {/*
+            {/* 
             {debugSeatId && (
               <div className="mt-2 border-t pt-2 text-[10px] text-gray-700">
                 <div className="flex items-center justify-between mb-1">
