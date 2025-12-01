@@ -274,7 +274,7 @@ const buildAbstractionRulesForExample = (lang: string) => String.raw`
 【コード例の抽象化テンプレート】
 
 あなたは、プログラミング教材のためにコードを「抽象化テンプレート」に変換するアシスタントです。
-**エラー相談 / コードレビュー相談のときに出力する「コード例:」の部分**は、必ず次のルールに従って抽象化してください。
+**エラー相談のときに出力する「コード例:」の部分**は、必ず次のルールに従って抽象化してください。
 
 以下の${lang}コード例を、**具体語（固有名・実データ）をすべて排除した抽象的な雛形**として書いてください。
 
@@ -326,7 +326,7 @@ const TEMPLATE_SYNTAX = `【文法・書き方の相談】
 →
 `
 
-const TEMPLATE_REVIEW = `【コードレビュー・バグの相談】
+const TEMPLATE_REVIEW = `【バグの相談】
 
 １：コード全体
 →
@@ -391,7 +391,7 @@ function describeQuestionMode(q: QuestionTypeForLog): string {
     case 'error':
       return 'エラー・例外の相談です。エラーメッセージとコードをもとに、原因と修正方針を説明してください。'
     case 'review':
-      return 'コードレビュー・バグの相談です。期待する動作と実際の動作を比べて、バグの原因や改善点を説明してください。'
+      return 'バグの相談です。期待する動作と実際の動作を比べて、バグの原因や改善点を説明してください。'
     case 'syntax':
       return '文法・書き方の相談です。構文や書き方の理解を助ける説明と、最小限のコード例を示してください。'
     case 'algo':
@@ -1354,7 +1354,7 @@ export default function ChatPage() {
       case 'task': return '課題の読み解き・進め方の相談'
       case 'error': return 'エラー・例外の相談'
       case 'syntax': return '文法・書き方の相談'
-      case 'review': return 'コードレビュー・バグの相談'
+      case 'review': return 'バグの相談'
       case 'algo': return '理論・アルゴリズムの相談'
       case 'free': return '自由記述の相談'
       default: return ''
@@ -1380,7 +1380,7 @@ export default function ChatPage() {
  よりあなたの状況に合った説明がしやすくなります。
 
 `
-    const reviewIntro = `【コードレビュー・バグの相談】
+    const reviewIntro = `【バグの相談】
 
 ※的確な指摘をするには、期待する動きと
  実際の動きを比べる必要があります。
@@ -2520,7 +2520,7 @@ createStreamingAssistant('')
                   🟥 エラー・例外の相談
                 </button>
 
-                {/* 🟩 コードレビュー */}
+                {/* 🟩 バグの相談*/}
                 <button
                   type="button"
                   className={`px-2 py-1 rounded border ${
@@ -2531,7 +2531,7 @@ createStreamingAssistant('')
                   onClick={() => setQuestionMode('review')}
                   disabled={!problem || waitingFeedback || loading}
                 >
-                  🟩 コードレビュー・バグの相談
+                  🟩 バグの相談
                 </button>
 
                 {/* 🟨 アルゴリズム */}
