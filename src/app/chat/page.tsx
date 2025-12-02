@@ -1,4 +1,4 @@
-// src/app/chat/page.tsx
+// src/app/chat/page.tsx (1/2)
 'use client'
 
 import React, {
@@ -64,7 +64,6 @@ function writeNudgeStage(id: string, stage: number) {
   localStorage.setItem(keyNudgeStage(id), String(stage))
 }
 
-
 function readTimer(id: string) {
   const accum = Number(localStorage.getItem(keyAccum(id)) || 0)
   const startStr = localStorage.getItem(keyStart(id))
@@ -106,7 +105,6 @@ type UpdateTimerOpts = {
 }
 
 const TIMER_OWNER_KEY = 'timerOwnerUid'
-
 
 /* ================== 入力欄ユーティリティ ================== */
 type AutoGrowProps = React.TextareaHTMLAttributes<HTMLTextAreaElement> & { maxVh?: number }
@@ -185,7 +183,6 @@ function asComment(lang: string, text: string) {
   return suffix ? `${prefix} ${text} ${suffix}` : `${prefix} ${text}`
 }
 
-
 // ★ 授業内容（教員が毎回編集するメモ）
 const CURRENT_LESSON_DESCRIPTION = String.raw`
 本日の授業では「配列」「for文／拡張for文」「メソッド定義と呼び出し」などを扱っています。
@@ -239,7 +236,6 @@ const outputRule = (lang: string) => String.raw`
 - 抽象箇所は <...> を使わず、TODOコメント穴埋めにすること。
 `.trim()
 
-
 const GRADING_PROMPT = String.raw`
 [役割] 教員として提出コードを採点し、学習者が自分の進捗を数値で把握できるようにする。
 [比較] 模範コードと学生コードを比較し、満たせている要件/未達の要件を抽出。
@@ -274,7 +270,7 @@ const buildAbstractionRulesForExample = (lang: string) => String.raw`
 【コード例の抽象化テンプレート】
 
 あなたは、プログラミング教材のためにコードを「抽象化テンプレート」に変換するアシスタントです。
-**エラー相談のときに出力する「コード例:」の部分**は、必ず次のルールに従って抽象化してください。
+**エラー相談 / コードレビュー相談のときに出力する「コード例:」の部分**は、必ず次のルールに従って抽象化してください。
 
 以下の${lang}コード例を、**具体語（固有名・実データ）をすべて排除した抽象的な雛形**として書いてください。
 
@@ -306,6 +302,9 @@ const TEMPLATE_TASK = `【課題の読み解き・作業工程の整理】
 
 ３：次に何をすればよいかわからないポイント
 →
+
+４：今書いているコード全体
+→
 `
 
 const TEMPLATE_ERROR = `【エラー・例外の相談】
@@ -313,7 +312,7 @@ const TEMPLATE_ERROR = `【エラー・例外の相談】
 １：エラーメッセージ全文（コピペでOK）
 →
 
-２：実行したコード（全部）
+２：今取り組んでいるコード全体
 →
 `
 
@@ -326,9 +325,9 @@ const TEMPLATE_SYNTAX = `【文法・書き方の相談】
 →
 `
 
-const TEMPLATE_REVIEW = `【バグの相談】
+const TEMPLATE_REVIEW = `【コードレビュー・バグの相談】
 
-１：コード全体
+１：今取り組んでいるコード全体
 →
 
 ２：期待していた出力・動作
@@ -382,7 +381,6 @@ type Problem = {
   visibleInChat?: boolean        // ← これを追加
 }
 
-
 /* ===== モード説明文 ===== */
 function describeQuestionMode(q: QuestionTypeForLog): string {
   switch (q) {
@@ -391,7 +389,7 @@ function describeQuestionMode(q: QuestionTypeForLog): string {
     case 'error':
       return 'エラー・例外の相談です。エラーメッセージとコードをもとに、原因と修正方針を説明してください。'
     case 'review':
-      return 'バグの相談です。期待する動作と実際の動作を比べて、バグの原因や改善点を説明してください。'
+      return 'コードレビュー・バグの相談です。期待する動作と実際の動作を比べて、バグの原因や改善点を説明してください。'
     case 'syntax':
       return '文法・書き方の相談です。構文や書き方の理解を助ける説明と、最小限のコード例を示してください。'
     case 'algo':
@@ -823,6 +821,8 @@ async function streamChat(
   return full;
 }
 
+// src/app/chat/page.tsx (2/2)
+
 /* ================== 画面コンポーネント ================== */
 export default function ChatPage() {
   const [allMessages, setAllMessages] = useState<{ [problemId: string]: Message[] }>({})
@@ -839,10 +839,11 @@ export default function ChatPage() {
   const [stepIndex, setStepIndex] = useState(0)
   const stepTextareaRef = useRef<HTMLTextAreaElement | null>(null)
 
-  // 課題の読み解き・進め方（3項目）
+  // 課題の読み解き・進め方（4項目）
   const [taskWhere, setTaskWhere] = useState('')         // １：どの課題・どこで止まっているか
   const [taskUnderstand, setTaskUnderstand] = useState('') // ２：自分なりの理解
   const [taskStuck, setTaskStuck] = useState('')         // ３：どこで詰まっているか
+  const [taskCode, setTaskCode] = useState('')           // ４：今書いているコード全体
 
   // エラー相談（2項目：テンプレ順に合わせる）
   const [errMessage, setErrMessage] = useState('') // １：エラーメッセージ全文
@@ -876,7 +877,6 @@ export default function ChatPage() {
   // 20分・30分・40分コメントなどの「ナッジ」をためておくキュー
   const [pendingNudges, setPendingNudges] = useState<string[]>([])
 
-
   // ===== seatNumber / studentId 初期取得 & ログイン時の全タイマーリセット =====
   const [seatNumber, setSeatNumber] = useState<string | null>(null)
   const [studentId, setStudentId] = useState<string | null>(null)       // ★ 学籍番号
@@ -894,13 +894,10 @@ export default function ChatPage() {
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (user) => {
       if (!user) {
-        console.warn('[AUTH] user が null です');
-        return;
+        console.warn('[AUTH] user が null です')
+        return
       }
       try {
-        // ★ 修正ポイント：
-        //   直前にログインしていたユーザーと今回の user.uid が「異なるときだけ」
-        //   問題ごとのローカルタイマーを全リセットする
         const prevUid = localStorage.getItem(TIMER_OWNER_KEY)
         if (prevUid && prevUid !== user.uid) {
           Object.keys(localStorage).forEach((k) => {
@@ -915,40 +912,38 @@ export default function ChatPage() {
         } else {
           console.log('[AUTH] same user as before. keep local timers.')
         }
-        // 現在のログインユーザーを記録
         localStorage.setItem(TIMER_OWNER_KEY, user.uid)
 
         const ref = doc(db, 'users', user.uid)
         const snap = await getDoc(ref)
         const data = snap.exists() ? (snap.data() as any) : null
 
-        console.group('[AUTH] onAuthStateChanged');
-        console.log('user.uid =', user.uid);
-        console.log('user.email =', user.email);
-        console.log('users doc exists? =', snap.exists());
-        console.log('users data =', data);
+        console.group('[AUTH] onAuthStateChanged')
+        console.log('user.uid =', user.uid)
+        console.log('user.email =', user.email)
+        console.log('users doc exists? =', snap.exists())
+        console.log('users data =', data)
 
         const fsSeat = normalizeSeatNumber(data?.seatNumber ?? null)
-        console.log('fsSeat(from users.seatNumber) =', fsSeat);
+        console.log('fsSeat(from users.seatNumber) =', fsSeat)
 
         if (fsSeat && !getSeatNumberFromStorage()) {
           localStorage.setItem('seatNumber', fsSeat)
           setSeatNumber(fsSeat)
-          console.log('=> seatNumber を localStorage / state に保存しました');
+          console.log('=> seatNumber を localStorage / state に保存しました')
         }
 
-        // ★ 学籍番号を users ドキュメント or メール から取得
         let sid: string | null = null
         if (data?.studentId) {
           sid = String(data.studentId)
-          console.log('studentId from users.doc =', sid);
+          console.log('studentId from users.doc =', sid)
         } else {
           sid = guessStudentIdFromEmail(user.email)
-          console.log('studentId guessed from email =', sid);
+          console.log('studentId guessed from email =', sid)
         }
 
-        console.log('[AUTH] resolved studentId =', sid);
-        console.groupEnd();
+        console.log('[AUTH] resolved studentId =', sid)
+        console.groupEnd()
 
         setStudentId(sid || null)
       } catch (e) {
@@ -958,25 +953,22 @@ export default function ChatPage() {
     return () => unsub()
   }, [])
 
-
-
-  // ★ seatNumber / studentId から students ドキュメントを用意
   useEffect(() => {
-    console.group('[STUDENTS EFFECT]');
+    console.group('[STUDENTS EFFECT]')
     const seat = normalizeSeatNumber(getSeatNumberFromStorage() ?? seatNumber ?? null)
     const docId = resolveStudentDocId()
-    console.log('seat(from storage/state) =', seat);
-    console.log('docId(from resolveStudentDocId) =', docId);
+    console.log('seat(from storage/state) =', seat)
+    console.log('docId(from resolveStudentDocId) =', docId)
 
     if (!docId && !seat) {
-      console.log('=> docId も seat も無いので何もしません');
-      console.groupEnd();
-      return;
+      console.log('=> docId も seat も無いので何もしません')
+      console.groupEnd()
+      return
     }
     if (!docId) {
-      console.log('=> seat はあるが docId が無いので何もしません');
-      console.groupEnd();
-      return;
+      console.log('=> seat はあるが docId が無いので何もしません')
+      console.groupEnd()
+      return
     }
 
     const ref = doc(db, 'students', docId)
@@ -984,8 +976,8 @@ export default function ChatPage() {
       try {
         const snap = await getDoc(ref)
         const existing = snap.exists() ? (snap.data() as any) : null
-        console.log('students doc exists? =', snap.exists());
-        console.log('existing data =', existing);
+        console.log('students doc.exists? =', snap.exists())
+        console.log('existing data =', existing)
 
         const base: any = {
           updatedAt: serverTimestamp(),
@@ -996,7 +988,7 @@ export default function ChatPage() {
           base.createdAt = serverTimestamp()
         }
 
-        console.log('setDoc payload =', base);
+        console.log('setDoc.payload =', base)
         await setDoc(ref, base, { merge: true })
 
         if (existing && typeof existing.taRequested === 'boolean') {
@@ -1004,25 +996,19 @@ export default function ChatPage() {
         }
 
         setStudentDocId(docId)
-        // ★ 念のためここでも state にセット
         if (!studentId) {
-          console.log('studentId state が空だったので docId を代入します');
-          setStudentId(docId);
+          console.log('studentId state が空だったので docId を代入します')
+          setStudentId(docId)
         }
       } catch (e) {
         console.warn('[students] ensure doc failed:', e)
       } finally {
-        console.groupEnd();
+        console.groupEnd()
       }
     })()
   }, [seatNumber, studentId])
 
-
-
   // ====== タイマー ======
-
-
-
   const [elapsedSec, setElapsedSec] = useState(0)
   const [nudgeStage, setNudgeStage] = useState(0)
   const lastTimerSyncRef = useRef<number>(0)
@@ -1043,7 +1029,6 @@ export default function ChatPage() {
     fetch('/api/problem')
       .then((res) => res.json())
       .then((data: Problem[]) => {
-        // ★ Chat表示フラグが true（または未設定）のものだけに絞る
         const visible = data.filter((p) => p.visibleInChat ?? true)
         setProblems(visible)
       })
@@ -1055,22 +1040,20 @@ export default function ChatPage() {
     lastTimerSyncRef.current = 0
   }, [problem?.id])
 
-  // ★ students コレクションの timer / problem 情報を更新
   const updateStudentTimerForProblem = async (p: Problem, opts: UpdateTimerOpts = {}) => {
     const docId = resolveStudentDocId()
-    console.group('[STUDENTS] updateStudentTimerForProblem');
-    console.log('problemId =', p.id, 'title =', p.title);
-    console.log('resolved docId =', docId);
+    console.group('[STUDENTS] updateStudentTimerForProblem')
+    console.log('problemId =', p.id, 'title =', p.title)
+    console.log('resolved docId =', docId)
     if (!docId) {
-      console.warn('docId が無いので timer 情報を保存しません');
-      console.groupEnd();
+      console.warn('docId が無いので timer 情報を保存しません')
+      console.groupEnd()
       return
     }
 
     const seat = normalizeSeatNumber(getSeatNumberFromStorage() ?? seatNumber ?? null)
     const ref = doc(db, 'students', docId)
 
-    // ★ ローカルタイマーから「累積秒数」と「動作中かどうか」を取得
     const { sec: elapsedSec, running } = getLocalElapsedSec(p.id)
 
     const payload: any = {
@@ -1079,44 +1062,38 @@ export default function ChatPage() {
       currentProblemId: p.id,
       currentProblemTitle: p.title,
       updatedAt: serverTimestamp(),
-
-      // ▼ 座席マップ用：ローカルタイマーの状態
-      timerBaseSec: elapsedSec,   // ここまでの累積秒
-      timerRunning: running,      // いま動いているかどうか
-
+      timerBaseSec: elapsedSec,
+      timerRunning: running,
       currentElapsedSec: elapsedSec,
     }
 
-    // 動作中のときだけ「再開時刻（サーバー時刻）」を記録
     if (running) {
       payload.timerResumedAt = serverTimestamp()
     } else {
       payload.timerResumedAt = null
     }
 
-    console.log('payload =', payload);
+    console.log('payload =', payload)
     try {
       await setDoc(ref, payload, { merge: true })
     } catch (e) {
       console.warn('[students] update timer failed:', e)
     } finally {
-      console.groupEnd();
+      console.groupEnd()
     }
   }
 
-
-  // ★ TA 呼び出しフラグを更新
   const updateStudentTaRequest = async (requested: boolean) => {
     const docId = resolveStudentDocId()
-    console.group('[TA] updateStudentTaRequest');
-    console.log('requested =', requested);
-    console.log('resolved docId =', docId);
-    console.log('studentId state =', studentId, 'studentDocId state =', studentDocId);
-    console.log('auth.currentUser?.email =', auth.currentUser?.email ?? null);
+    console.group('[TA] updateStudentTaRequest')
+    console.log('requested =', requested)
+    console.log('resolved docId =', docId)
+    console.log('studentId state =', studentId, 'studentDocId state =', studentDocId)
+    console.log('auth.currentUser?.email =', auth.currentUser?.email ?? null)
 
     if (!docId) {
       console.warn('[TA] studentId が取得されていませんでした')
-      console.groupEnd();
+      console.groupEnd()
       return
     }
 
@@ -1131,26 +1108,23 @@ export default function ChatPage() {
         },
         { merge: true }
       )
-      console.log('=> TA フラグを書き込みました');
+      console.log('=> TA フラグを書き込みました')
     } catch (e) {
       console.warn('[students] update TA request failed:', e)
     } finally {
-      console.groupEnd();
+      console.groupEnd()
     }
   }
 
   const handleToggleTa = () => {
     if (!problem) return
 
-    setTaRequested(prev => {
+    setTaRequested((prev) => {
       const next = !prev
       console.log('[TA] ボタンクリック: prev -> next', prev, next)
-
-      // Firestore 更新は非同期で投げる（失敗しても UI は変わる）
-      updateStudentTaRequest(next).catch(e =>
+      updateStudentTaRequest(next).catch((e) =>
         console.error('[TA] updateStudentTaRequest error', e)
       )
-
       return next
     })
   }
@@ -1161,7 +1135,6 @@ export default function ChatPage() {
     setProblem(p)
     resumeTimer(p.id)
 
-    // ★ ナッジ段階を問題ごとに復元（毎回リセットしない）
     const stage = readNudgeStage(p.id)
     setNudgeStage(stage)
     nudgeStageRef.current = stage
@@ -1173,10 +1146,10 @@ export default function ChatPage() {
     updateStudentTaRequest(false)
   }
 
-  // 経過秒 & ナッジ
   const NUDGE_FIRST = 2 * 60
   const NUDGE_SECOND = 3 * 60
   const TA_CALL_THRESHOLD_SEC = 4 * 60
+
   useEffect(() => {
     if (!problem) return
 
@@ -1189,7 +1162,6 @@ export default function ChatPage() {
 
       let stage = nudgeStageRef.current
 
-      // 20分
       if (sec >= NUDGE_FIRST && stage < 1) {
         pushAssistant(
           '20分間取り組んでいますね。何かわからないことがあれば何でも質問してください。',
@@ -1198,7 +1170,6 @@ export default function ChatPage() {
         stage = 1
       }
 
-      // 30分（あなたの設定では26分コメント）
       if (sec >= NUDGE_SECOND && stage < 2) {
         pushAssistant(
           '悩んでいる様子です。TAを呼んで一緒に解決しましょう。私に聞いても大丈夫です。',
@@ -1207,12 +1178,11 @@ export default function ChatPage() {
         stage = 2
       }
 
-      // 40分
       if (sec >= TA_CALL_THRESHOLD_SEC && stage < 3) {
         pushAssistant(
           '40分以上同じ問題に取り組んでいるようです。\n' +
-          '画面右上に「TAを呼ぶ」ボタンが表示されています。\n' +
-          '人間のTAに来てもらいたい場合は、そのボタンを押してください。',
+            '画面右上に「TAを呼ぶ」ボタンが表示されています。\n' +
+            '人間のTAに来てもらいたい場合は、そのボタンを押してください。',
           { isNudge: true }
         )
         stage = 3
@@ -1221,7 +1191,7 @@ export default function ChatPage() {
       if (stage !== nudgeStageRef.current) {
         nudgeStageRef.current = stage
         setNudgeStage(stage)
-        writeNudgeStage(problem.id, stage) // ★ 永続化
+        writeNudgeStage(problem.id, stage)
       }
     }
 
@@ -1236,17 +1206,15 @@ export default function ChatPage() {
   ) => {
     if (!problem) return
 
-    // ★ ナッジのとき、LLM ストリーミング中ならいったんキューに積む
     if (isNudge && loading) {
-      setPendingNudges(prev => {
-        // すでに同じ文面のナッジがキューにあるなら追加しない
+      setPendingNudges((prev) => {
         if (prev.includes(text)) return prev
         return [...prev, text]
       })
       return
     }
 
-    setAllMessages(prev => {
+    setAllMessages((prev) => {
       const cur = prev[problem.id] || []
       return {
         ...prev,
@@ -1262,35 +1230,31 @@ export default function ChatPage() {
     })
   }
 
-  // ★ ナッジの自動フラッシュ
   useEffect(() => {
-    // 問題未選択 or ローディング中 or キュー空 → 何もしない
     if (!problem) return
     if (loading) return
     if (pendingNudges.length === 0) return
 
-    // ローディングが終わったタイミングで、キューされていたナッジを順番に流す
     const texts = [...pendingNudges]
     setPendingNudges([])
 
-    setAllMessages(prev => {
+    setAllMessages((prev) => {
       const cur = prev[problem.id] || []
 
       return {
         ...prev,
         [problem.id]: [
           ...cur,
-          ...texts.map(t => ({
+          ...texts.map((t) => ({
             role: 'assistant' as const,
             content: t,
-            isNudge: true,           // ★ ナッジであることを明示
+            isNudge: true,
           })),
         ],
       }
     })
   }, [loading, pendingNudges, problem])
 
-  // ストリーミング更新
   const createStreamingAssistant = (
     initial = '',
     options?: { isAbstractTemplate?: boolean }
@@ -1298,7 +1262,7 @@ export default function ChatPage() {
     if (!problem) return null
     const { isAbstractTemplate = false } = options || {}
 
-    setAllMessages(prev => {
+    setAllMessages((prev) => {
       const cur = prev[problem.id] || []
       return {
         ...prev,
@@ -1317,7 +1281,7 @@ export default function ChatPage() {
 
   const updateLastAssistant = (text: string | ((prev: string) => string)) => {
     if (!problem) return
-    setAllMessages(prev => {
+    setAllMessages((prev) => {
       const cur = prev[problem.id] || []
       if (cur.length === 0) return prev
       const idx = cur.length - 1
@@ -1336,7 +1300,10 @@ export default function ChatPage() {
 
   const buildSummary = (msgs: Message[]) => {
     const summaryLimit = 500
-    const userText = msgs.filter((m) => m.role === 'user').map((m) => m.content).join('\n')
+    const userText = msgs
+      .filter((m) => m.role === 'user')
+      .map((m) => m.content)
+      .join('\n')
     return userText.length > summaryLimit ? userText.slice(-summaryLimit) : userText
   }
 
@@ -1347,17 +1314,25 @@ export default function ChatPage() {
     placeholder?: string
     value: string
     setValue: (v: string) => void
+    highlight?: boolean   // ★ 強調用（赤字にするか）
   }
 
   const questionTitle = useMemo(() => {
     switch (questionMode) {
-      case 'task': return '課題の読み解き・進め方の相談'
-      case 'error': return 'エラー・例外の相談'
-      case 'syntax': return '文法・書き方の相談'
-      case 'review': return 'バグの相談'
-      case 'algo': return '理論・アルゴリズムの相談'
-      case 'free': return '自由記述の相談'
-      default: return ''
+      case 'task':
+        return '課題の読み解き・進め方の相談'
+      case 'error':
+        return 'エラー・例外の相談'
+      case 'syntax':
+        return '文法・書き方の相談'
+      case 'review':
+        return 'コードレビュー・バグの相談'
+      case 'algo':
+        return '理論・アルゴリズムの相談'
+      case 'free':
+        return '自由記述の相談'
+      default:
+        return ''
     }
   }, [questionMode])
 
@@ -1380,7 +1355,7 @@ export default function ChatPage() {
  よりあなたの状況に合った説明がしやすくなります。
 
 `
-    const reviewIntro = `【バグの相談】
+    const reviewIntro = `【コードレビュー・バグの相談】
 
 ※的確な指摘をするには、期待する動きと
  実際の動きを比べる必要があります。
@@ -1394,36 +1369,49 @@ export default function ChatPage() {
 `
 
     switch (questionMode) {
-     case 'task':
-       return [
-         {
-           key: 'task-where',
-           label:
-             '【課題の読み解き・作業工程の整理】\n\n' +
-             '１：今取り組んでいる問題のどのあたりで止まっているか',
-           placeholder: '例）課題3-2の～（問題文の具体的な個所）で止まっています など',
-           value: taskWhere,
-           setValue: setTaskWhere,
-         },
-         {
-           key: 'task-understand',
-           label:
-             '２：自分なりに「何をする課題か」理解していること\n' +
-             '   （分かっていること／分かったと思っていること）',
-           placeholder: '例）入力された数を配列に入れて、合計を求める課題だと思っています など',
-           value: taskUnderstand,
-           setValue: setTaskUnderstand,
-         },
-         {
-           key: 'task-stuck',
-           label:
-             '３：次に何をすればよいか分からないポイント\n' +
-             '   （作業工程のどこが曖昧か・不安か）',
-           placeholder: '例）配列に入れるところまではできたが、その後何をすれば良いか分からない など',
-           value: taskStuck,
-           setValue: setTaskStuck,
-         },
-       ]
+      case 'task':
+        return [
+          {
+            key: 'task-where',
+            label:
+              '【課題の読み解き・作業工程の整理】\n\n' +
+              '１：今取り組んでいる問題のどのあたりで止まっているか',
+            placeholder: '例）課題3-2の～（問題文の具体的な個所）で止まっています など',
+            value: taskWhere,
+            setValue: setTaskWhere,
+          },
+          {
+            key: 'task-understand',
+            label:
+              '２：自分なりに「何をする課題か」理解していること\n' +
+              '   （分かっていること／分かったと思っていること）',
+            placeholder:
+              '例）入力された数を配列に入れて、合計を求める課題だと思っています など',
+            value: taskUnderstand,
+            setValue: setTaskUnderstand,
+          },
+          {
+            key: 'task-stuck',
+            label:
+              '３：次に何をすればよいか分からないポイント\n' +
+              '   （作業工程のどこが曖昧か・不安か）',
+            placeholder:
+              '例）配列に入れるところまではできたが、その後何をすれば良いか分からない など',
+            value: taskStuck,
+            setValue: setTaskStuck,
+          },
+          {
+            key: 'task-code',
+            label:
+              '４：今書いているコード全体\n' +
+              '   ※できるだけ、現在取り組んでいるコードを「全部」貼り付けてください。',
+            placeholder:
+              '例）Main.java 全文／他にクラスがあれば続けて全部貼り付けてください。',
+            value: taskCode,
+            setValue: setTaskCode,
+            highlight: true,
+          },
+        ]
 
       case 'error':
         return [
@@ -1436,10 +1424,16 @@ export default function ChatPage() {
           },
           {
             key: 'err-code',
-            label: errorIntro + '２：実行したコード（全部）',
-            placeholder: 'エラーが出ているクラスやメソッドを貼り付けてください。',
+            label:
+              errorIntro +
+              '２：今取り組んでいるコード全体\n' +
+              '   ※必ず、現在のコードを「全部」貼り付けてください。',
+            placeholder:
+              '例）Main.java など、今実行しているコードを「全部」貼り付けてください。\n' +
+              'ファイルが複数ある場合は、すべて続けて貼り付けてください。',
             value: errCode,
             setValue: setErrCode,
+            highlight: true,
           },
         ]
 
@@ -1472,10 +1466,16 @@ export default function ChatPage() {
         return [
           {
             key: 'rev-code',
-            label: reviewIntro + '１：コード全体',
-            placeholder: 'レビューしてほしいコードを貼り付けてください。',
+            label:
+              reviewIntro +
+              '１：今取り組んでいるコード全体\n' +
+              '   ※必ず、現在のコードを「全部」貼り付けてください。',
+            placeholder:
+              'レビューしてほしいコードを、今書いている分を「全部」貼り付けてください。\n' +
+              '複数ファイルがある場合は、順番にすべて貼り付けてください。',
             value: reviewCode,
             setValue: setReviewCode,
+            highlight: true,
           },
           {
             key: 'rev-exp',
@@ -1497,8 +1497,11 @@ export default function ChatPage() {
         return [
           {
             key: 'algo-point',
-            label: algoIntro + '１：理解できていないポイント\n（例：式の意味／処理の流れ／概念そのもの など）',
-            placeholder: '例）再帰の終了条件が分からない／計算量O(n^2)の意味が分からない など',
+            label:
+              algoIntro +
+              '１：理解できていないポイント\n（例：式の意味／処理の流れ／概念そのもの など）',
+            placeholder:
+              '例）再帰の終了条件が分からない／計算量O(n^2)の意味が分からない など',
             value: algoPoint,
             setValue: setAlgoPoint,
           },
@@ -1508,8 +1511,10 @@ export default function ChatPage() {
         return [
           {
             key: 'free',
-            label: '【自由記述の相談】\n\n授業や課題に関することを自由に書いてください。',
-            placeholder: '例）問題3-2でfor文の条件式がよく分かりません。今は〜のように考えています。',
+            label:
+              '【自由記述の相談】\n\n授業や課題に関することを自由に書いてください。',
+            placeholder:
+              '例）問題3-2でfor文の条件式がよく分かりません。今は〜のように考えています。',
             value: freeText,
             setValue: setFreeText,
           },
@@ -1518,48 +1523,53 @@ export default function ChatPage() {
       default:
         return []
     }
-  },  [
+  }, [
     questionMode,
-    taskWhere, taskUnderstand, taskStuck,
-    errMessage, errCode,
-    hintQuestion, hintCode,
-    reviewCode, reviewExpected, reviewActual,
-    algoPoint, freeText,
+    taskWhere,
+    taskUnderstand,
+    taskStuck,
+    taskCode,
+    errMessage,
+    errCode,
+    hintQuestion,
+    hintCode,
+    reviewCode,
+    reviewExpected,
+    reviewActual,
+    algoPoint,
+    freeText,
   ])
 
-  // モード変更時はステップを先頭に戻す
   useEffect(() => {
     setStepIndex(0)
   }, [questionMode])
 
-  // ステップ切り替えごとにフォーカス
   useEffect(() => {
     if (!gradingMode && questionMode !== 'none') {
       setTimeout(() => stepTextareaRef.current?.focus(), 0)
     }
   }, [questionMode, stepIndex, gradingMode])
 
-  // 現在の入力から送信テキストを組み立て
   const currentUserText = useMemo(() => {
     switch (questionMode) {
       case 'task': {
-        const answers = [taskWhere, taskUnderstand, taskStuck]
-        if (!answers.some(a => a.trim())) return ''
+        const answers = [taskWhere, taskUnderstand, taskStuck, taskCode]
+        if (!answers.some((a) => a.trim())) return ''
         return fillTemplate(TEMPLATE_TASK, answers)
       }
       case 'error': {
         const answers = [errMessage, errCode]
-        if (!answers.some(a => a.trim())) return ''
+        if (!answers.some((a) => a.trim())) return ''
         return fillTemplate(TEMPLATE_ERROR, answers)
       }
       case 'syntax': {
         const answers = [hintQuestion, hintCode]
-        if (!answers.some(a => a.trim())) return ''
+        if (!answers.some((a) => a.trim())) return ''
         return fillTemplate(TEMPLATE_SYNTAX, answers)
       }
       case 'review': {
         const answers = [reviewCode, reviewExpected, reviewActual]
-        if (!answers.some(a => a.trim())) return ''
+        if (!answers.some((a) => a.trim())) return ''
         return fillTemplate(TEMPLATE_REVIEW, answers)
       }
       case 'algo': {
@@ -1571,28 +1581,34 @@ export default function ChatPage() {
       default:
         return ''
     }
-  },  [
+  }, [
     questionMode,
-    taskWhere, taskUnderstand, taskStuck,
-    errMessage, errCode,
-    hintQuestion, hintCode,
-    reviewCode, reviewExpected, reviewActual,
-    algoPoint, freeText,
+    taskWhere,
+    taskUnderstand,
+    taskStuck,
+    taskCode,
+    errMessage,
+    errCode,
+    hintQuestion,
+    hintCode,
+    reviewCode,
+    reviewExpected,
+    reviewActual,
+    algoPoint,
+    freeText,
   ])
 
   const currentLines = currentUserText ? currentUserText.split('\n').length : 0
   const currentChars = currentUserText.length
 
-  // モードごとの「必須項目が埋まっているか」判定
   const isQuestionValid = useMemo(() => {
     switch (questionMode) {
       case 'task':
-        // ①どの課題か ＋ ③どこで詰まっているか は必須、②は任意
+        // ①どの課題か ＋ ③どこで詰まっているか は必須、コードは任意
         return !!taskWhere.trim() && !!taskStuck.trim()
       case 'error':
         return !!errMessage.trim() && !!errCode.trim()
       case 'syntax':
-        // 「使いたいもの」は必須、「目的」は任意
         return !!hintQuestion.trim()
       case 'review':
         return !!reviewCode.trim() && !!reviewExpected.trim() && !!reviewActual.trim()
@@ -1603,33 +1619,35 @@ export default function ChatPage() {
       default:
         return false
     }
-  },  [
+  }, [
     questionMode,
-    taskWhere, taskUnderstand, taskStuck,
-    errMessage, errCode,
-    hintQuestion, hintCode,
-    reviewCode, reviewExpected, reviewActual,
-    algoPoint, freeText,
+    taskWhere,
+    taskStuck,
+    errMessage,
+    errCode,
+    hintQuestion,
+    reviewCode,
+    reviewExpected,
+    reviewActual,
+    algoPoint,
+    freeText,
   ])
 
-  /** 送信（通常モードのみ） */
   const sendWithContext = async (userContent: string, qType: QuestionTypeForLog) => {
     if (!userContent.trim() || !problem) return
 
-    // ★ 課題文ほぼそのまま貼り付けチェック（文法・理論・自由記述・課題整理のみ）
     if (qType === 'syntax' || qType === 'algo' || qType === 'free' || qType === 'task') {
       if (looksLikeProblemCopy(problem.description || '', userContent)) {
         pushAssistant(
           '課題文そのもの、あるいは課題文の大部分がそのまま貼り付けられているようです。\n' +
-          'このモードでは「どの部分が分からないか」「自分でどう考えたか」を書いて質問してください。\n' +
-          '・課題文のうち、どの行／どの文が分からないのか\n' +
-          'などを含めて、短く書き直してからもう一度送信してください。'
+            'このモードでは「どの部分が分からないか」「自分でどう考えたか」を書いて質問してください。\n' +
+            '・課題文のうち、どの行／どの文が分からないのか\n' +
+            'などを含めて、短く書き直してからもう一度送信してください。'
         )
         return
       }
     }
 
-    // 1. チャット欄＆ログ用のユーザーメッセージはそのまま保存
     const userMessage: Message = {
       role: 'user',
       content: userContent,
@@ -1639,7 +1657,6 @@ export default function ChatPage() {
     const current = [...(allMessages[problem.id] || []), userMessage]
     setAllMessages({ ...allMessages, [problem.id]: current })
 
-    // 2. LLM 用プロンプトをモード別に組み立て
     const summary = buildSummary(current)
     const langGuess = detectLang(userContent, problem)
     const lang = langGuess || 'java'
@@ -1648,7 +1665,6 @@ export default function ChatPage() {
     let promptForLLM = ''
 
     if (qType === 'error' || qType === 'review') {
-      // (A) 模範コード全文（参考用）
       const exemplarForPrompt = (problem.solution_files || [])
         .map((f) => {
           const l = (f.language && f.language.trim()) || detectLang(f.code)
@@ -1656,38 +1672,34 @@ export default function ChatPage() {
         })
         .join('\n\n')
 
-      // (B) 「コード例:」だけに適用する抽象化ルール
       const abstractionRules = buildAbstractionRulesForExample(lang)
 
-      // (C) 最終プロンプト
       promptForLLM = String.raw`${BASE_TEACHER_PROMPT(lang)}
 
-  【相談モード】
-  ${modeDesc}
+【相談モード】
+${modeDesc}
 
-  【今回の授業内容（教員メモ）】
-  ${CURRENT_LESSON_DESCRIPTION}
+【今回の授業内容（教員メモ）】
+${CURRENT_LESSON_DESCRIPTION}
 
-  【今回扱っている問題】
-  ${problem.title}
-  ${problem.description}
+【今回扱っている問題】
+${problem.title}
+${problem.description}
 
-  【模範コード（参考・任意）】
-  ${exemplarForPrompt || '(この問題には模範コードが設定されていません)'}
+【模範コード（参考・任意）】
+${exemplarForPrompt || '(この問題には模範コードが設定されていません)'}
 
-  【これまでの履歴要約】
-  ${summary}
+【これまでの履歴要約】
+${summary}
 
-  【学生のコード・エラーや挙動の説明】
-  ${userContent}
+【学生のコード・エラーや挙動の説明】
+${userContent}
 
-  【コード例の抽象化ルール】
-  ${abstractionRules}
+【コード例の抽象化ルール】
+${abstractionRules}
 
-  ${outputRule(lang)}`
-    }
- else if (qType === 'task') {
-      // 🟧 課題の読み解き・作業工程の整理（コードは一切出さない）
+${outputRule(lang)}`
+    } else if (qType === 'task') {
       promptForLLM = String.raw`
 あなたは、プログラミング課題の「読み解き」と「作業工程の整理」を手伝う教員です。
 
@@ -1709,7 +1721,7 @@ ${problem.description}
 【これまでの履歴要約】
 ${summary}
 
-【学生の状況・考え】
+【学生の状況・考え（コード全体を含む）】
 ${userContent}
 
 [出力形式]
@@ -1718,7 +1730,6 @@ ${userContent}
 3) 「今すぐできそうな最初の一歩」を1〜2文で提案
 `.trim()
     } else if (qType === 'free') {
-      // 🟪 自由記述：あいさつ・雑談用。コードは絶対に出さない＆5行以内
       promptForLLM = String.raw`${FREE_TEXT_PROMPT}
 
 【相談モード】
@@ -1730,9 +1741,7 @@ ${summary}
 【学生の相談内容】
 ${userContent}
 `
-} else {
-      // 🟦 文法・書き方 / 🟨 理論・アルゴリズム
-      // → 問題文（あなたの修正済み）＋変数名を変えるルール＋禁止識別子リスト＋抽象化ルールを追加
+    } else {
       const bannedIdList = extractIdentifiersFromSolutionFiles(problem.solution_files || [])
       const bannedSection = bannedIdList.length
         ? `\n【禁止識別子リスト（重要）】
@@ -1745,7 +1754,6 @@ ${problem.description}
 `
         : ''
 
-      // ★追加：文法/アルゴ用のコード例も抽象化テンプレートに従わせる
       const abstractionRules = buildAbstractionRulesForExample(lang)
 
       promptForLLM = String.raw`${BASE_TEACHER_PROMPT(lang)}
@@ -1774,11 +1782,8 @@ ${abstractionRules}
 ${outputRule(lang)}`
     }
 
-
-    // 3. 1回の呼び出しでストリーミング表示
     setLoading(true)
 
-    // ★ この質問タイプの回答コードは抽象化テンプレート扱いにする
     const isAbstract =
       qType === 'error' ||
       qType === 'review' ||
@@ -1804,23 +1809,21 @@ ${outputRule(lang)}`
     }
   }
 
-
   const handleSend = async () => {
     if (!problem || waitingFeedback || loading) return
     if (!isQuestionValid) return
     const text = currentUserText.trim()
     if (!text) return
-    const qType: QuestionTypeForLog =
-      questionMode === 'none' ? 'unknown' : questionMode
+    const qType: QuestionTypeForLog = questionMode === 'none' ? 'unknown' : questionMode
 
     await sendWithContext(text, qType)
 
-    // 入力リセット
     switch (questionMode) {
       case 'task':
         setTaskWhere('')
         setTaskUnderstand('')
         setTaskStuck('')
+        setTaskCode('')
         break
       case 'error':
         setErrMessage('')
@@ -1845,7 +1848,6 @@ ${outputRule(lang)}`
     setQuestionMode('none')
   }
 
-  /* ===== Firestore 保存（通常モードの会話ログ） ===== */
   const persistChatLog = async (resolved: boolean) => {
     try {
       if (!problem) return
@@ -1861,7 +1863,6 @@ ${outputRule(lang)}`
 
       let aIdx = -1
 
-      // ★ 1. まず「ナッジではない最後の assistant」を探す
       for (let i = msgs.length - 1; i >= 0; i--) {
         const m = msgs[i]
         if (m.role === 'assistant' && !m.isNudge) {
@@ -1871,7 +1872,6 @@ ${outputRule(lang)}`
         }
       }
 
-      // ★ 2. 見つからなければ（＝ナッジしかない場合）は従来通り最後の assistant を使う
       if (aIdx === -1) {
         for (let i = msgs.length - 1; i >= 0; i--) {
           const m = msgs[i]
@@ -1883,13 +1883,11 @@ ${outputRule(lang)}`
         }
       }
 
-      // assistant が 1つも無いならログを作らない
       if (aIdx === -1) {
-        console.warn('[Firestore] no assistant message found, skip persistChatLog')
+        console.warn('[Firestore] no assistant message found, skip.persistChatLog')
         return
       }
 
-      // 直前の user を探す（従来通り）
       if (aIdx !== -1) {
         for (let j = aIdx - 1; j >= 0; j--) {
           const m = msgs[j]
@@ -1904,7 +1902,7 @@ ${outputRule(lang)}`
       if (!userMode) userMode = gradingMode ? 'grading' : 'normal'
 
       const { accum, runningAt } = readTimer(problem.id)
-      const ms = accum + (runningAt ? (Date.now() - runningAt) : 0)
+      const ms = accum + (runningAt ? Date.now() - runningAt : 0)
       const durationSec = Math.max(0, Math.floor(ms / 1000))
 
       await addDoc(collection(db, 'chatLogs'), {
@@ -1935,21 +1933,28 @@ ${outputRule(lang)}`
     setLastAssistantIndex(null)
   }
 
-
   const formatMessageContent = (content: string): (string | { code: string })[] => {
     const regex = /```(?:[a-zA-Z0-9#+-]*)?\n([\s\S]*?)```/g
-    const parts: (string | { code: string })[] = []; let last = 0; let match: RegExpExecArray | null
+    const parts: (string | { code: string })[] = []
+    let last = 0
+    let match: RegExpExecArray | null
     while ((match = regex.exec(content))) {
       if (match.index > last) parts.push(content.slice(last, match.index))
-      const raw = match[1] ?? ''; parts.push({ code: prettyCodeAuto(raw) }); last = regex.lastIndex
+      const raw = match[1] ?? ''
+      parts.push({ code: prettyCodeAuto(raw) })
+      last = regex.lastIndex
     }
     if (last < content.length) parts.push(content.slice(last))
     return parts
   }
 
-  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages, waitingFeedback])
+  useEffect(
+    () => {
+      bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+    },
+    [messages, waitingFeedback]
+  )
 
-  /* ================== 採点モード：ファイル提出 & 保存 ================== */
   const [uploads, setUploads] = useState<{ name: string; size: number; text: string }[]>([])
   const [gradingSaving, setGradingSaving] = useState(false)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
@@ -1958,16 +1963,18 @@ ${outputRule(lang)}`
     if (!files) return
     const exts = ['.java', '.c', '.cpp', '.py', '.cs', '.kt', '.js', '.ts', '.tsx']
     const readers = Array.from(files).map(async (f) => {
-      if (!exts.some(ext => f.name.toLowerCase().endsWith(ext))) return null
+      if (!exts.some((ext) => f.name.toLowerCase().endsWith(ext))) return null
       const text = await f.text()
       return { name: f.name, size: f.size, text }
     })
-    Promise.all(readers).then(list => {
-      const add = (list.filter(Boolean) as any[])
-      setUploads(prev => [...prev, ...add])
+    Promise.all(readers).then((list) => {
+      const add = list.filter(Boolean) as any[]
+      setUploads((prev) => [...prev, ...add])
     })
   }
-  function removeUpload(idx: number) { setUploads(prev => prev.filter((_, i) => i !== idx)) }
+  function removeUpload(idx: number) {
+    setUploads((prev) => prev.filter((_, i) => i !== idx))
+  }
 
   function handleDropOnFileZone(e: React.DragEvent<HTMLDivElement>) {
     e.preventDefault()
@@ -1975,44 +1982,50 @@ ${outputRule(lang)}`
   }
 
   function resolveStudentDocId(): string | null {
-    const fromState = studentId;
-    const fromStudentDoc = studentDocId;
-    const fromEmail = guessStudentIdFromEmail(auth.currentUser?.email ?? null);
+    const fromState = studentId
+    const fromStudentDoc = studentDocId
+    const fromEmail = guessStudentIdFromEmail(auth.currentUser?.email ?? null)
 
-    console.group('[RESOLVE] resolveStudentDocId');
-    console.log('studentId state =', fromState);
-    console.log('studentDocId state =', fromStudentDoc);
-    console.log('email =', auth.currentUser?.email ?? null);
-    console.log('studentId guessed from email =', fromEmail);
+    console.group('[RESOLVE] resolveStudentDocId')
+    console.log('studentId state =', fromState)
+    console.log('studentDocId state =', fromStudentDoc)
+    console.log('email =', auth.currentUser?.email ?? null)
+    console.log('studentId guessed from email =', fromEmail)
 
-    let result: string | null = null;
-    if (fromState) result = fromState;
-    else if (fromStudentDoc) result = fromStudentDoc;
-    else if (fromEmail) result = fromEmail;
+    let result: string | null = null
+    if (fromState) result = fromState
+    else if (fromStudentDoc) result = fromStudentDoc
+    else if (fromEmail) result = fromEmail
 
-    console.log('=> resolved docId =', result);
-    if (!result) console.warn('[RESOLVE] 学籍IDを決定できませんでした');
-    console.groupEnd();
+    console.log('=> resolved docId =', result)
+    if (!result) console.warn('[RESOLVE] 学籍IDを決定できませんでした')
+    console.groupEnd()
 
-    return result;
+    return result
   }
 
-
-  async function safeGetDownloadURL(r: ReturnType<typeof sRef>, timeoutMs = 8000): Promise<string> {
+  async function safeGetDownloadURL(
+    r: ReturnType<typeof sRef>,
+    timeoutMs = 8000
+  ): Promise<string> {
     return await Promise.race<string>([
       getDownloadURL(r),
-      new Promise((_, rej) => setTimeout(() => rej(new Error('getDownloadURL timeout')), timeoutMs)) as any
-    ]);
+      new Promise((_, rej) => setTimeout(() => rej(new Error('getDownloadURL timeout')), timeoutMs)) as any,
+    ])
   }
 
-  async function safeUploadString(r: ReturnType<typeof sRef>, content: string, timeoutMs = 15015) {
-    console.time(`[UPLOAD] ${r.fullPath}`);
+  async function safeUploadString(
+    r: ReturnType<typeof sRef>,
+    content: string,
+    timeoutMs = 15015
+  ) {
+    console.time(`[UPLOAD] ${r.fullPath}`)
     const res = await Promise.race([
       uploadString(r, content, 'raw', { contentType: 'text/plain; charset=utf-8' }),
       new Promise<never>((_, rej) => setTimeout(() => rej(new Error('uploadString timeout')), timeoutMs)),
-    ]);
-    console.timeEnd(`[UPLOAD] ${r.fullPath}`);
-    return res;
+    ])
+    console.timeEnd(`[UPLOAD] ${r.fullPath}`)
+    return res
   }
 
   async function handleGradingSubmit() {
@@ -2020,15 +2033,18 @@ ${outputRule(lang)}`
     if (gradingInputMode === 'files' && uploads.length === 0) return
     if (gradingInputMode === 'paste' && !gradingPaste.trim()) return
 
-    setLoading(true); setGradingSaving(true)
+    setLoading(true)
+    setGradingSaving(true)
 
     const filesForPrompt =
       gradingInputMode === 'paste'
         ? `// pasted_all.txt\n\`\`\`\n${gradingPaste}\n\`\`\``
-        : uploads.map(u => `// ${u.name}\n\`\`\`\n${u.text}\n\`\`\``).join('\n\n')
+        : uploads.map((u) => `// ${u.name}\n\`\`\`\n${u.text}\n\`\`\``).join('\n\n')
 
-    const exemplarForPrompt = (problem.solution_files||[])
-      .map(f => `// ${f.filename}\n\`\`\`\n${f.code}\n\`\`\``).join('\n\n') || '(なし)'
+    const exemplarForPrompt =
+      (problem.solution_files || [])
+        .map((f) => `// ${f.filename}\n\`\`\`\n${f.code}\n\`\`\``)
+        .join('\n\n') || '(なし)'
 
     const prompt = `${GRADING_PROMPT}
 
@@ -2042,39 +2058,38 @@ ${exemplarForPrompt}
 ${filesForPrompt}
 `
 
-let fullGradingResult = ''   // ★ 追加：AI出力を溜める
+    let fullGradingResult = ''
 
-createStreamingAssistant('')
-  try {
-    await streamChat(prompt, (delta) => {
-      fullGradingResult += delta            // ★ 追加：deltaを累積
-      updateLastAssistant((prev) => (prev || '') + delta) // 既存の表示更新は維持
-    })
-  } catch (e) {
-    console.error('grading failed', e)
-    updateLastAssistant('採点中にエラーが発生しました。もう一度お試しください。')
-  }
+    createStreamingAssistant('')
+    try {
+      await streamChat(prompt, (delta) => {
+        fullGradingResult += delta
+        updateLastAssistant((prev) => (prev || '') + delta)
+      })
+    } catch (e) {
+      console.error('grading failed', e)
+      updateLastAssistant('採点中にエラーが発生しました。もう一度お試しください。')
+    }
 
-  let saveOk = false
-  try {
-    // ★ 修正：空文字ではなく、溜めた採点結果を保存
-    saveOk = await saveGradingSubmission(fullGradingResult.trim())
-  } finally {
-    setLoading(false)
-    setGradingSaving(false)
-    if (saveOk) {
-      setUploads([])
-      setGradingPaste('')
+    let saveOk = false
+    try {
+      saveOk = await saveGradingSubmission(fullGradingResult.trim())
+    } finally {
+      setLoading(false)
+      setGradingSaving(false)
+      if (saveOk) {
+        setUploads([])
+        setGradingPaste('')
+      }
     }
   }
-}
 
   async function saveGradingSubmission(gradingResult: string): Promise<boolean> {
     if (!problem) return false
 
     console.group('[SAVE] grading submission')
     const { accum, runningAt } = readTimer(problem.id)
-    const ms = accum + (runningAt ? (Date.now() - runningAt) : 0)
+    const ms = accum + (runningAt ? Date.now() - runningAt : 0)
     const durationSec = Math.max(0, Math.floor(ms / 1000))
 
     const storage = getStorage(undefined, 'gs://virtualta-916ce-9c6cd.firebasestorage.app')
@@ -2135,7 +2150,9 @@ createStreamingAssistant('')
       return true
     } catch (e) {
       console.error('[SAVE] failed:', e)
-      pushAssistant('保存でエラーが発生しました。ネットワーク/ログイン状態/Storage ルールをご確認ください。もう一度お試しください。')
+      pushAssistant(
+        '保存でエラーが発生しました。ネットワーク/ログイン状態/Storage ルールをご確認ください。もう一度お試しください。'
+      )
       return false
     } finally {
       clearTimeout(watchdog)
@@ -2143,10 +2160,8 @@ createStreamingAssistant('')
     }
   }
 
-  /* ============ 画面描画 ============ */
   const sendDisabled = !problem || loading || waitingFeedback || !isQuestionValid
 
-  // ★ タイマー再開ボタンからも「ローカル累積タイムの状態」を students に反映  
   const handleTimerRestartClick = async () => {
     if (!problem || waitingFeedback) return
     pauseTimer(problem.id)
@@ -2159,18 +2174,18 @@ createStreamingAssistant('')
       <main className="flex h-screen">
         {/* 左：問題リスト */}
         <div className="w-1/3 bg-gray-50 border-r p-4 overflow-y-auto">
-        <h2 className="font-bold.mb-2">問題を選択</h2>
-        {visibleProblems.map((p) => (
-          <button
-            key={p.id}
-            onClick={() => handleSelectProblem(p)}
-            className={`block w-full text-left p-2 mb-2 rounded ${
-              problem?.id === p.id ? 'bg-blue-100' : 'hover:bg-blue-50'
-            }`}
-          >
-            {p.title}
-          </button>
-        ))}
+          <h2 className="font-bold mb-2">問題を選択</h2>
+          {visibleProblems.map((p) => (
+            <button
+              key={p.id}
+              onClick={() => handleSelectProblem(p)}
+              className={`block w-full text-left p-2 mb-2 rounded ${
+                problem?.id === p.id ? 'bg-blue-100' : 'hover:bg-blue-50'
+              }`}
+            >
+              {p.title}
+            </button>
+          ))}
           <div className="mt-4 border-t pt-3">
             <h3 className="font-semibold text-sm text-gray-700 mb-2">選択中の問題</h3>
             {problem ? (
@@ -2189,17 +2204,12 @@ createStreamingAssistant('')
           <div className="flex items-center justify-between mb-2">
             <h1 className="text-xl font-bold">{problem?.title || '問題未選択'}</h1>
             <div className="flex items-center gap-3">
-              {/* ★ 学籍番号の表示 */}
               {studentId && (
-                <span className="text-xs px-2 py-1 rounded border bg-white">
-                  学籍: {studentId}
-                </span>
+                <span className="text-xs px-2 py-1 rounded border bg-white">学籍: {studentId}</span>
               )}
 
               {seatNumber && (
-                <span className="text-xs px-2 py-1 rounded border bg-white">
-                  座席: {seatNumber}
-                </span>
+                <span className="text-xs px-2 py-1 rounded border bg-white">座席: {seatNumber}</span>
               )}
 
               {problem && (
@@ -2207,9 +2217,7 @@ createStreamingAssistant('')
                   ⏱ 継続: {fmtHMS(elapsedSec)}
                 </span>
               )}
-              {/* 40分以上取り組んでいるときだけ TA 呼び出しボタンを表示 */}
-              {/* TA呼び出しボタン（画像＋テキスト） */}
-              {/* TA呼び出しボタン：常に表示してトグルできるようにする */}
+
               {problem && elapsedSec >= TA_CALL_THRESHOLD_SEC && (
                 <button
                   type="button"
@@ -2226,7 +2234,7 @@ createStreamingAssistant('')
             </div>
           </div>
 
-          <div className="flex items-center gap-4.mb-4">
+          <div className="flex items-center gap-4 mb-4">
             <div className="flex items-center gap-2">
               <span className={!gradingMode ? 'font-bold' : 'text-gray-400'}>通常モード</span>
               <label className="mx-2 relative inline-flex items-center cursor-pointer">
@@ -2234,16 +2242,31 @@ createStreamingAssistant('')
                   type="checkbox"
                   className="sr-only peer"
                   checked={gradingMode}
-                  onChange={(e) => { setGradingMode(e.target.checked); setQuestionMode('none') }}
+                  onChange={(e) => {
+                    setGradingMode(e.target.checked)
+                    setQuestionMode('none')
+                  }}
                   disabled={waitingFeedback}
                 />
-                <div className={`w-11 h-6 rounded-full transition-all ${waitingFeedback ? 'bg-gray-300' : 'bg-gray-200 peer-checked:bg-green-500'}`} />
-                <div className={`absolute left-0.5 top-0.5 w-5 h-5 bg-white rounded-full shadow transition-all ${gradingMode ? 'translate-x-full' : ''}`} />
+                <div
+                  className={`w-11 h-6 rounded-full transition-all ${
+                    waitingFeedback ? 'bg-gray-300' : 'bg-gray-200 peer-checked:bg-green-500'
+                  }`}
+                />
+                <div
+                  className={`absolute left-0.5 top-0.5 w-5 h-5 bg-white rounded-full shadow transition-all ${
+                    gradingMode ? 'translate-x-full' : ''
+                  }`}
+                />
               </label>
               <span className={gradingMode ? 'font-bold' : 'text-gray-400'}>採点モード</span>
             </div>
 
-            {waitingFeedback && <span className="text-xs text-rose-600">※ 解決確認に回答するまで送信できません</span>}
+            {waitingFeedback && (
+              <span className="text-xs text-rose-600">
+                ※ 解決確認に回答するまで送信できません
+              </span>
+            )}
           </div>
 
           {/* メッセージ表示 */}
@@ -2255,46 +2278,43 @@ createStreamingAssistant('')
                     msg.role === 'user' ? 'bg-blue-100' : 'bg-green-50'
                   }`}
                 >
-                {(() => {
-                  const parts = (() => {
-                    const regex = /```(?:[a-zA-Z0-9#+-]*)?\n([\s\S]*?)```/g
-                    const res: (string | { code: string })[] = []
-                    let last = 0
-                    let m: RegExpExecArray | null
-                    while ((m = regex.exec(msg.content))) {
-                      if (m.index > last) res.push(msg.content.slice(last, m.index))
+                  {(() => {
+                    const parts = (() => {
+                      const regex = /```(?:[a-zA-Z0-9#+-]*)?\n([\s\S]*?)```/g
+                      const res: (string | { code: string })[] = []
+                      let last = 0
+                      let m: RegExpExecArray | null
+                      while ((m = regex.exec(msg.content))) {
+                        if (m.index > last) res.push(msg.content.slice(last, m.index))
 
-                      let rawCode = m[1] ?? ''
+                        let rawCode = m[1] ?? ''
 
-                      // ★ 抽象化テンプレート用のメッセージなら、先頭に注意コメントを差し込む
-                      if (msg.role === 'assistant' && msg.isAbstractTemplate) {
-                        rawCode = ensureAbstractComment(rawCode)
+                        if (msg.role === 'assistant' && msg.isAbstractTemplate) {
+                          rawCode = ensureAbstractComment(rawCode)
+                        }
+
+                        res.push({ code: prettyCodeAuto(rawCode) })
+                        last = regex.lastIndex
                       }
-
-                      res.push({ code: prettyCodeAuto(rawCode) })
-                      last = regex.lastIndex
-                    }
-                    if (last < msg.content.length) res.push(msg.content.slice(last))
-                    return res
-                  })()
-                  return parts.map((p, i) =>
-                    typeof p === 'string' ? (
-                      <p key={i}>{p}</p>
-                    ) : (
-                      <pre
-                        key={i}
-                        className="bg-gray-200 p-2 rounded overflow-x-auto text-sm"
-                      >
-                        <code>{p.code}</code>
-                      </pre>
+                      if (last < msg.content.length) res.push(msg.content.slice(last))
+                      return res
+                    })()
+                    return parts.map((p, i) =>
+                      typeof p === 'string' ? (
+                        <p key={i}>{p}</p>
+                      ) : (
+                        <pre
+                          key={i}
+                          className="bg-gray-200 p-2 rounded overflow-x-auto text-sm"
+                        >
+                          <code>{p.code}</code>
+                        </pre>
+                      )
                     )
-                  )
-                })()}
+                  })()}
                 </div>
               )
 
-              // ★ 解決確認待ちのアシスタントメッセージだけ、
-              //    「バブル＋アンケート」をまとめて表示するように変更
               if (
                 msg.role === 'assistant' &&
                 !msg.isNudge &&
@@ -2303,10 +2323,8 @@ createStreamingAssistant('')
               ) {
                 return (
                   <div key={idx} className="space-y-2">
-                    {/* 回答全文（つぶさない） */}
                     <div className="flex justify-start">{bubble}</div>
 
-                    {/* 解決できたかアンケート */}
                     <div className="flex justify-start">
                       <div className="bg-amber-50 border border-amber-200 text-amber-900 rounded px-3 py-2 text-sm flex items-center gap-2">
                         <span>この回答で問題は解決できましたか？</span>
@@ -2328,7 +2346,6 @@ createStreamingAssistant('')
                 )
               }
 
-              // 通常表示
               return (
                 <div
                   key={idx}
@@ -2341,144 +2358,20 @@ createStreamingAssistant('')
             <div ref={bottomRef} />
           </div>
 
-          {/* ===== 採点モードUI ===== */}
+          {/* 採点モードUI */}
           {problem && !waitingFeedback && gradingMode && (
             <div className="mb-3 border rounded p-3 bg-slate-50 space-y-3">
-              <div className="text-sm font-semibold">採点モード提出（どちらか選択）</div>
-
-              <div className="flex items-center gap-6 text-sm">
-                <label className="flex items-center gap-2">
-                  <input
-                    type="radio"
-                    name="grading-input-mode"
-                    value="files"
-                    checked={gradingInputMode === 'files'}
-                    onChange={() => setGradingInputMode('files')}
-                  />
-                  ファイル提出（複数可）
-                </label>
-                <label className="flex items-center gap-2">
-                  <input
-                    type="radio"
-                    name="grading-input-mode"
-                    value="paste"
-                    checked={gradingInputMode === 'paste'}
-                    onChange={() => { setGradingInputMode('paste'); setTimeout(()=>pasteTextareaRef.current?.focus(),0) }}
-                  />
-                  コード全文を貼り付ける
-                </label>
-              </div>
-
-              {gradingInputMode === 'files' && (
-                <div
-                  onDragOver={(e) => e.preventDefault()}
-                  onDrop={handleDropOnFileZone}
-                  className="rounded-2xl border-2 border-dashed border-sky-300 bg-sky-50/70 hover:bg-sky-50 transition-colors p-4 space-y-3"
-                >
-                  <div className="flex items-center justify-between">
-                    <p className="text-xs text-gray-700">
-                      .java / .c / .cpp / .py / .cs / .kt / .js / .ts / .tsx をこのエリアに<strong>ドラッグ&ドロップ</strong>できます。<br/>
-                      下の「ファイルを選ぶ」からも追加可能。提出前は一覧から<strong>削除</strong>・<strong>追加</strong>ができます。
-                    </p>
-                    <label
-                      className="cursor-pointer text-xs bg-sky-600 text-white px-3 py-1.5 rounded hover:opacity-90 shadow"
-                      title="ファイル選択"
-                    >
-                      ファイルを選ぶ
-                      <input
-                        ref={fileInputRef}
-                        type="file"
-                        multiple
-                        accept=".java,.c,.cpp,.py,.cs,.kt,.js,.ts,.tsx"
-                        onChange={(e) => { handlePickFiles(e.target.files); if (e.currentTarget) e.currentTarget.value = '' }}
-                        className="hidden"
-                      />
-                    </label>
-                  </div>
-
-                  {uploads.length === 0 ? (
-                    <div className="text-xs text-gray-500">ファイルの選択がまだありません。</div>
-                  ) : (
-                    <ul className="mt-1 text-xs divide-y rounded border bg-white">
-                      {uploads.map((u, i) => (
-                        <li key={`${u.name}-${i}`} className="flex items-center justify-between px-3 py-2">
-                          <span className="truncate">{u.name}（{u.size}B）</span>
-                          <button
-                            className="text-rose-700 border border-rose-300 px-2 py-0.5 rounded hover:bg-rose-50"
-                            onClick={() => removeUpload(i)}
-                          >
-                            削除
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-              )}
-
-              {gradingInputMode === 'paste' && (
-                <div className="space-y-2">
-                  <div className="border-2 border-dashed rounded-2xl p-4 bg-white/70 hover:bg-white transition-colors">
-                    <div className="flex items-center justify-between mb-2">
-                      <div className="text-sm font-semibold">ここに<strong>コード全文</strong>を貼り付け（Ctrl+V / ⌘V）</div>
-                      <button
-                        type="button"
-                        className="text-xs border px-3 py-1 rounded hover:bg-gray-50"
-                        onClick={() => pasteTextareaRef.current?.focus()}
-                      >
-                        クリップボードから貼り付け
-                      </button>
-                    </div>
-                    <div className="mb-2 text-[12px] text-gray-600">
-                      テキストやコードのファイルをドラッグ&ドロップしても読み込めます。
-                    </div>
-                    <AutoGrowTextarea
-                      ref={pasteTextareaRef as any}
-                      value={gradingPaste}
-                      onChange={(e) => setGradingPaste(e.target.value)}
-                      placeholder={`例）
-                      /* あなたのプロジェクト全コード */
-                      class Main { public static void main(String[] args) { /* ... */ } }
-                      // 複数ファイルはそのまま連結でOK
-                      `}
-                      maxVh={50}
-                      className="min-h-[16rem] rounded-xl"
-                    />
-                    <div className="mt-1 text-xs text-gray-600">
-                      {gradingPaste.split('\n').length} 行 / {gradingPaste.length} 文字
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              <div className="pt-2">
-                <button
-                  className="bg-emerald-600 text-white px-4 py-2 rounded disabled:opacity-50"
-                  onClick={handleGradingSubmit}
-                  disabled={
-                    loading || gradingSaving || waitingFeedback || !problem ||
-                    (gradingInputMode === 'files' && uploads.length === 0) ||
-                    (gradingInputMode === 'paste' && !gradingPaste.trim())
-                  }
-                >
-                  {gradingSaving ? '採点&保存中…' : '採点として提出'}
-                </button>
-              </div>
-
-              <div className="text-[11px] text-gray-500">
-                ※ 採点モードでは質問の受付は行いません（採点のみ）。ファイル提出と貼り付けの切り替えは提出前ならいつでも可能です。
-              </div>
+              {/* …このあたりから下は元のまま（採点モードUI・通常モードUI） … */}
+              {/* ここは変更していないので、元のファイルと同じ内容をそのまま使ってください */}
             </div>
           )}
 
-          {/* ===== 通常モード：ステップ入力 UI ===== */}
+          {/* 通常モード：ステップ入力 UI */}
           {!gradingMode && (
             <div className="mt-4 space-y-3">
-              {/* 質問パターン選択 */}
-              <div className="flex flex-wrap.items-center gap-2 text-xs">
+              <div className="flex flex-wrap items-center gap-2 text-xs">
                 <span className="text-gray-600">質問のパターンから選ぶ：</span>
 
-                {/* 🟧 課題の読み解き／作業工程の整理 */}
                 <button
                   type="button"
                   className={`px-2 py-1 rounded border ${
@@ -2492,7 +2385,6 @@ createStreamingAssistant('')
                   🟧 課題の読み解き・進め方
                 </button>
 
-                {/* 🟦 書き方 */}
                 <button
                   type="button"
                   className={`px-2 py-1 rounded border ${
@@ -2506,7 +2398,6 @@ createStreamingAssistant('')
                   🟦 書き方の相談
                 </button>
 
-                {/* 🟥 エラー */}
                 <button
                   type="button"
                   className={`px-2 py-1 rounded border ${
@@ -2520,7 +2411,6 @@ createStreamingAssistant('')
                   🟥 エラー・例外の相談
                 </button>
 
-                {/* 🟩 バグの相談*/}
                 <button
                   type="button"
                   className={`px-2 py-1 rounded border ${
@@ -2531,10 +2421,9 @@ createStreamingAssistant('')
                   onClick={() => setQuestionMode('review')}
                   disabled={!problem || waitingFeedback || loading}
                 >
-                  🟩 バグの相談
+                  🟩 コードレビュー・バグの相談
                 </button>
 
-                {/* 🟨 アルゴリズム */}
                 <button
                   type="button"
                   className={`px-2 py-1 rounded border ${
@@ -2548,7 +2437,6 @@ createStreamingAssistant('')
                   🟨 アルゴリズム・理論の相談
                 </button>
 
-                {/* 🟪 自由記述 */}
                 <button
                   type="button"
                   className={`px-2 py-1 rounded border ${
@@ -2563,14 +2451,12 @@ createStreamingAssistant('')
                 </button>
               </div>
 
-              {/* パターン未選択時の案内 */}
               {questionMode === 'none' && (
                 <div className="border rounded p-3 text-xs text-gray-600 bg-gray-50">
                   まず上のボタンのどれかを選んでください。選んだ内容に応じて、1項目ずつ入力する画面が表示されます。
                 </div>
               )}
 
-              {/* ステップ入力本体 */}
               {questionMode !== 'none' && (
                 <div className="border rounded p-3 bg-white space-y-3">
                   <div className="flex items-center justify-between text-xs">
@@ -2580,105 +2466,107 @@ createStreamingAssistant('')
                     </div>
                   </div>
 
-                  {steps.length > 0 && (
-                    <>
-                      {(() => {
-                        const totalSteps = steps.length
-                        const currentStep = steps[stepIndex]
-                        const isLastStep = stepIndex === totalSteps - 1
-                        const canGoNext = stepIndex < totalSteps - 1
+                  {steps.length > 0 && (() => {
+                    const totalSteps = steps.length
+                    // ★ ここで stepIndex を配列範囲内にクランプする
+                    const clampedIndex = Math.min(stepIndex, totalSteps - 1)
+                    const currentStep = steps[clampedIndex]
+                    const isLastStep = clampedIndex === totalSteps - 1
+                    const canGoNext = clampedIndex < totalSteps - 1
 
-                        return (
-                          <>
-                            <div className="space-y-1">
-                              <div className="text-xs font-semibold whitespace-pre-wrap">
-                                {currentStep.label}
-                              </div>
-                              <AutoGrowTextarea
-                                ref={stepTextareaRef as any}
-                                value={currentStep.value}
-                                onChange={(e) => currentStep.setValue(e.target.value)}
-                                placeholder={currentStep.placeholder}
-                                maxVh={50}
-                                className="min-h-[8rem] rounded-xl"
-                                onKeyDown={(e) => {
-                                  if (waitingFeedback || loading) return
-                                  if (e.key === 'Tab') {
-                                    e.preventDefault()
-                                    const el = e.currentTarget
-                                    const start = el.selectionStart ?? 0
-                                    const end = el.selectionEnd ?? 0
-                                    const indent = '  '
-                                    const v = currentStep.value || ''
-                                    const next = v.slice(0, start) + indent + v.slice(end)
-                                    currentStep.setValue(next)
-                                    requestAnimationFrame(() => {
-                                      (el as any).selectionStart = (el as any).selectionEnd = start + indent.length
-                                    })
-                                  }
-                                  if (e.key === 'Enter' && !e.shiftKey) {
-                                    e.preventDefault()
-                                    const total = steps.length
-                                    const isLast = stepIndex === total - 1
-                                    if (isLast) {
-                                      if (sendDisabled) return
-                                      handleSend()
-                                    } else {
-                                      setStepIndex(stepIndex + 1)
-                                    }
-                                  }
-                                }}
-                              />
-                            </div>
+                    const labelClass = `text-xs font-semibold whitespace-pre-wrap ${
+                      currentStep.highlight ? 'text-red-700' : ''
+                    }`
 
-                            <div className="flex items-center justify-between text-xs mt-2">
-                              <div className="flex items-center gap-2">
+                    return (
+                      <>
+                        <div className="space-y-1">
+                          <div className={labelClass}>
+                            {currentStep.label}
+                          </div>
+                          <AutoGrowTextarea
+                            ref={stepTextareaRef as any}
+                            value={currentStep.value}
+                            onChange={(e) => currentStep.setValue(e.target.value)}
+                            placeholder={currentStep.placeholder}
+                            maxVh={50}
+                            className="min-h-[8rem] rounded-xl"
+                            onKeyDown={(e) => {
+                              if (waitingFeedback || loading) return
+                              if (e.key === 'Tab') {
+                                e.preventDefault()
+                                const el = e.currentTarget
+                                const start = el.selectionStart ?? 0
+                                const end = el.selectionEnd ?? 0
+                                const indent = '  '
+                                const v = currentStep.value || ''
+                                const next = v.slice(0, start) + indent + v.slice(end)
+                                currentStep.setValue(next)
+                                requestAnimationFrame(() => {
+                                  (el as any).selectionStart = (el as any).selectionEnd = start + indent.length
+                                })
+                              }
+                              if (e.key === 'Enter' && !e.shiftKey) {
+                                e.preventDefault()
+                                const total = steps.length
+                                const isLast = clampedIndex === total - 1
+                                if (isLast) {
+                                  if (sendDisabled) return
+                                  handleSend()
+                                } else {
+                                  setStepIndex((i) => Math.min(total - 1, i + 1))
+                                }
+                              }
+                            }}
+                          />
+                        </div>
+
+                        <div className="flex items-center justify-between text-xs mt-2">
+                          <div className="flex.items-center gap-2">
+                            <button
+                              type="button"
+                              className="px-2 py-1 rounded border hover:bg-gray-50"
+                              onClick={() => setQuestionMode('none')}
+                            >
+                              ← パターン選択に戻る
+                            </button>
+                            {steps.length > 1 && (
+                              <>
                                 <button
                                   type="button"
-                                  className="px-2 py-1 rounded border hover:bg-gray-50"
-                                  onClick={() => setQuestionMode('none')}
+                                  className="px-2 py-1 rounded border hover:bg-gray-50 disabled:opacity-40"
+                                  onClick={() => setStepIndex((i) => Math.max(0, i - 1))}
+                                  disabled={clampedIndex === 0}
                                 >
-                                  ← パターン選択に戻る
+                                  ◀ 前へ
                                 </button>
-                                {steps.length > 1 && (
-                                  <>
-                                    <button
-                                      type="button"
-                                      className="px-2 py-1 rounded border hover:bg-gray-50 disabled:opacity-40"
-                                      onClick={() => setStepIndex((i) => Math.max(0, i - 1))}
-                                      disabled={stepIndex === 0}
-                                    >
-                                      ◀ 前へ
-                                    </button>
-                                    <button
-                                      type="button"
-                                      className="px-2 py-1 rounded border hover:bg-gray-50 disabled:opacity-40"
-                                      onClick={() =>
-                                        setStepIndex((i) => Math.min(steps.length - 1, i + 1))
-                                      }
-                                      disabled={!canGoNext}
-                                    >
-                                      次へ ▶
-                                    </button>
-                                  </>
-                                )}
-                              </div>
-
-                              <div className="flex items-center gap-3">
                                 <button
-                                  className="bg-blue-600 text-white px-4 py-2 rounded disabled:opacity-50"
-                                  onClick={handleSend}
-                                  disabled={sendDisabled}
+                                  type="button"
+                                  className="px-2 py-1 rounded border hover:bg-gray-50 disabled:opacity-40"
+                                  onClick={() =>
+                                    setStepIndex((i) => Math.min(steps.length - 1, i + 1))
+                                  }
+                                  disabled={!canGoNext}
                                 >
-                                  {loading ? '送信中...' : '送信'}
+                                  次へ ▶
                                 </button>
-                              </div>
-                            </div>
-                          </>
-                        )
-                      })()}
-                    </>
-                  )}
+                              </>
+                            )}
+                          </div>
+
+                          <div className="flex items-center gap-3">
+                            <button
+                              className="bg-blue-600 text-white px-4 py-2 rounded disabled:opacity-50"
+                              onClick={handleSend}
+                              disabled={sendDisabled}
+                            >
+                              {loading ? '送信中...' : '送信'}
+                            </button>
+                          </div>
+                        </div>
+                      </>
+                    )
+                  })()}
                 </div>
               )}
             </div>
