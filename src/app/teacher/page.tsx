@@ -143,12 +143,12 @@ const diffMinutesFromNow = (
   return Math.floor(diff / 60000)
 }
 
-// 経過時間に応じた背景色
+// 経過時間に応じた背景色（ダーク対応）
 const seatBgClassByMinutes = (minutes: number | null): string => {
-  if (minutes == null) return 'bg-white'
-  if (minutes < 20) return 'bg-white'
-  if (minutes < 30) return 'bg-amber-100'
-  return 'bg-red-200'
+  if (minutes == null) return 'bg-white dark:bg-gray-950'
+  if (minutes < 20) return 'bg-white dark:bg-gray-950'
+  if (minutes < 30) return 'bg-amber-100 dark:bg-amber-900/30'
+  return 'bg-red-200 dark:bg-red-900/30'
 }
 
 // 座席ブロック定義（画像のレイアウト準拠）
@@ -603,15 +603,17 @@ export default function TeacherPage() {
   const anyLoading = chatLoading || subLoading
 
   return (
-    <main className="h-screen flex flex-col">
+    <main className="h-screen flex flex-col bg-white text-gray-900 dark:bg-gray-950 dark:text-gray-100">
       {/* ヘッダ */}
-      <header className="border-b px-4 py-2 flex items-center justify-between bg-white">
-        <h1 className="font-bold text-lg">教員・TA向け 可視化画面</h1>
-        <div className="text-xs text-gray-600 flex items-center gap-2">
+      <header className="border-b px-4 py-2 flex items-center justify-between bg-white dark:bg-gray-950 border-gray-200 dark:border-gray-800">
+        <h1 className="font-bold text-lg text-gray-900 dark:text-gray-100">
+          教員・TA向け 可視化画面
+        </h1>
+        <div className="text-xs text-gray-600 dark:text-gray-300 flex items-center gap-2">
           <span>
             表示上限:
             <select
-              className="ml-1 border rounded px-1 py-0.5 text-xs"
+              className="ml-1 border rounded px-1 py-0.5 text-xs bg-white dark:bg-gray-900 border-gray-200 dark:border-gray-800 text-gray-900 dark:text-gray-100"
               value={limitCount}
               onChange={(e) => setLimitCount(Number(e.target.value) || 100)}
             >
@@ -621,7 +623,7 @@ export default function TeacherPage() {
             </select>
           </span>
           <button
-            className="text-xs border rounded px-2 py-1 hover:bg-gray-50"
+            className="text-xs border rounded px-2 py-1 hover:bg-gray-50 dark:hover:bg-gray-900 bg-white dark:bg-gray-950 border-gray-200 dark:border-gray-800"
             onClick={() => {
               // 「再読み込み」は主に問題フィルタ用の候補を更新
               setNowMs(Date.now())
@@ -662,33 +664,49 @@ export default function TeacherPage() {
       {/* コンテンツ */}
       <div className="flex flex-1 overflow-hidden">
         {/* 左：フィルタ */}
-        <aside className="w-64 border-r p-3 text-xs bg-gray-50 space-y-3 overflow-y-auto">
+        <aside className="w-64 border-r p-3 text-xs bg-gray-50 dark:bg-gray-900 space-y-3 overflow-y-auto border-gray-200 dark:border-gray-800">
           {/* ★ 追加：日付フィルタ（ログ一覧のみ切替） */}
           <div>
-            <div className="font-semibold mb-1 text-gray-700">日付フィルタ（ログ一覧）</div>
+            <div className="font-semibold mb-1 text-gray-700 dark:text-gray-200">
+              日付フィルタ（ログ一覧）
+            </div>
+
             <input
               type="date"
-              className="w-full border rounded px-2 py-1 bg-white"
+              className="
+                w-full border rounded px-2 py-1
+                bg-white dark:bg-gray-950
+                border-gray-200 dark:border-gray-800
+                text-gray-900 dark:text-gray-100
+                dark:[color-scheme:dark]
+              "
               value={logDateYMD}
               onChange={(e) => setLogDateYMD(e.target.value)}
             />
+
             <div className="mt-1 flex gap-1">
               <button
-                className="border rounded px-2 py-0.5 text-[10px] bg-white hover:bg-gray-50"
+                className="border rounded px-2 py-0.5 text-[10px]
+                          bg-white dark:bg-gray-950
+                          hover:bg-gray-50 dark:hover:bg-gray-900
+                          border-gray-200 dark:border-gray-800"
                 onClick={() => setLogDateYMD(getTodayYMDLocal())}
               >
                 今日へ戻す
               </button>
             </div>
-            <div className="text-[10px] text-gray-500 mt-1">
+
+            <div className="text-[10px] text-gray-500 dark:text-gray-400 mt-1">
               ※座席ビューは本日固定です。ここで切り替わるのは下のログ一覧だけです。
             </div>
           </div>
 
           <div>
-            <div className="font-semibold mb-1 text-gray-700">問題フィルタ</div>
+            <div className="font-semibold mb-1 text-gray-700 dark:text-gray-200">
+              問題フィルタ
+            </div>
             <select
-              className="w-full border rounded px-2 py-1 bg-white"
+              className="w-full border rounded px-2 py-1 bg-white dark:bg-gray-950 border-gray-200 dark:border-gray-800 text-gray-900 dark:text-gray-100"
               value={problemFilter}
               onChange={(e) => setProblemFilter(e.target.value)}
             >
@@ -703,9 +721,11 @@ export default function TeacherPage() {
 
           {/* 既存フィルタは残す（チャットにのみ効く） */}
           <div>
-            <div className="font-semibold mb-1 text-gray-700">質問タイプ</div>
+            <div className="font-semibold mb-1 text-gray-700 dark:text-gray-200">
+              質問タイプ
+            </div>
             <select
-              className="w-full border rounded px-2 py-1 bg-white"
+              className="w-full border rounded px-2 py-1 bg-white dark:bg-gray-950 border-gray-200 dark:border-gray-800 text-gray-900 dark:text-gray-100"
               value={questionTypeFilter}
               onChange={(e) => setQuestionTypeFilter(e.target.value as any)}
             >
@@ -720,9 +740,11 @@ export default function TeacherPage() {
           </div>
 
           <div>
-            <div className="font-semibold mb-1 text-gray-700">解決状況</div>
+            <div className="font-semibold mb-1 text-gray-700 dark:text-gray-200">
+              解決状況
+            </div>
             <select
-              className="w-full border rounded px-2 py-1 bg-white"
+              className="w-full border rounded px-2 py-1 bg-white dark:bg-gray-950 border-gray-200 dark:border-gray-800 text-gray-900 dark:text-gray-100"
               value={resolvedFilter}
               onChange={(e) => setResolvedFilter(e.target.value as any)}
             >
@@ -732,30 +754,32 @@ export default function TeacherPage() {
             </select>
           </div>
 
-          <div className="text-[10px] text-gray-500">
+          <div className="text-[10px] text-gray-500 dark:text-gray-400">
             ※質問タイプ/解決状況フィルタはチャットログのみ対象です。採点提出は問題フィルタのみ適用されます。
           </div>
         </aside>
 
         {/* 右：メイン表示 */}
-        <section className="flex-1 overflow-y-auto p-4 space-y-4">
+        <section className="flex-1 overflow-y-auto p-4 space-y-4 bg-white dark:bg-gray-950">
           {/* 座席ビュー */}
-          <section className="border rounded bg-white p-3 text-xs space-y-2">
+          <section className="border rounded bg-white dark:bg-gray-950 p-3 text-xs space-y-2 border-gray-200 dark:border-gray-800">
             <div className="flex items-center justify-between mb-1">
-              <h2 className="font-semibold text-sm">座席ビュー（本日固定）</h2>
-              <div className="text-[10px] text-gray-500 flex items-center gap-3">
+              <h2 className="font-semibold text-sm text-gray-900 dark:text-gray-100">
+                座席ビュー（本日固定）
+              </h2>
+              <div className="text-[10px] text-gray-500 dark:text-gray-400 flex items-center gap-3">
                 {studentsLoading ? <span>読み込み中...</span> : null}
                 <span>色凡例（本日分・全モード共通）:</span>
                 <span className="flex items-center gap-1">
-                  <span className="inline-block w-3 h-3 border bg-white" />
+                  <span className="inline-block w-3 h-3 border bg-white dark:bg-gray-950 border-gray-200 dark:border-gray-800" />
                   <span>&lt; 20分</span>
                 </span>
                 <span className="flex items-center gap-1">
-                  <span className="inline-block w-3 h-3 border bg-amber-100" />
+                  <span className="inline-block w-3 h-3 border bg-amber-100 dark:bg-amber-900/30 border-gray-200 dark:border-gray-800" />
                   <span>20分以上</span>
                 </span>
                 <span className="flex items-center gap-1">
-                  <span className="inline-block w-3 h-3 border bg-red-200" />
+                  <span className="inline-block w-3 h-3 border bg-red-200 dark:bg-red-900/30 border-gray-200 dark:border-gray-800" />
                   <span>30分以上</span>
                 </span>
                 <span className="flex items-center gap-1">
@@ -774,7 +798,7 @@ export default function TeacherPage() {
                 className="flex flex-col items-center gap-3 origin-top"
                 style={{ transform: `scale(${seatScale})` }}
               >
-                <div className="mt-1 mb-1 px-6 py-1 border text-[11px] text-center">
+                <div className="mt-1 mb-1 px-6 py-1 border text-[11px] text-center bg-white dark:bg-gray-950 border-gray-200 dark:border-gray-800 text-gray-900 dark:text-gray-100">
                   教卓
                 </div>
 
@@ -786,7 +810,7 @@ export default function TeacherPage() {
                     return (
                       <div
                         key={block.id}
-                        className={`grid gap-px border bg-gray-200 ${offsetClass}`}
+                        className={`grid gap-px border bg-gray-200 dark:bg-gray-800 ${offsetClass}`}
                         style={{
                           gridTemplateColumns: `repeat(${block.cols.length}, 4rem)`,
                         }}
@@ -879,7 +903,7 @@ export default function TeacherPage() {
                             let bgClass =
                               matchesFilter && minutesToday != null
                                 ? seatBgClassByMinutes(minutesToday)
-                                : 'bg-white'
+                                : 'bg-white dark:bg-gray-950'
 
                             let mainLine = title
                             let subLine =
@@ -899,7 +923,7 @@ export default function TeacherPage() {
                               isTodaySeat = true
                             } else if (
                               latestAny?.createdAt &&
-                              isSameDay(latestAny.createdAt, nowMs)
+                              isSameDay(latestAny?.createdAt, nowMs)
                             ) {
                               isTodaySeat = true
                             } else if (
@@ -914,7 +938,7 @@ export default function TeacherPage() {
                               subLine = ''
                               taLine = ''
                               minutesToday = null
-                              bgClass = 'bg-white'
+                              bgClass = 'bg-white dark:bg-gray-950'
                             }
 
                             if (problemFilter !== 'all' && !matchesFilter) {
@@ -924,7 +948,8 @@ export default function TeacherPage() {
                             }
 
                             if (seatInfo?.taRequested && isTodaySeat) {
-                              bgClass = 'bg-rose-200 border-rose-500'
+                              bgClass =
+                                'bg-rose-200 dark:bg-rose-900/35 border-rose-500 dark:border-rose-500'
                             }
 
                             const isSelectedSeat =
@@ -933,9 +958,9 @@ export default function TeacherPage() {
                             return (
                               <div
                                 key={seatId}
-                                className={`flex flex-col items-center justify-center h-14 border ${bgClass} ${
+                                className={`flex flex-col items-center justify-center h-14 border ${bgClass} border-gray-200 dark:border-gray-800 ${
                                   isSelectedSeat
-                                    ? 'ring-2 ring-blue-400 ring-offset-1'
+                                    ? 'ring-2 ring-blue-400 ring-offset-1 dark:ring-offset-gray-950'
                                     : ''
                                 }`}
                                 onClick={() => {
@@ -952,23 +977,23 @@ export default function TeacherPage() {
                                   setDebugSeatId(seatId)
                                 }}
                               >
-                                <div className="text-[11px] font-semibold flex items-center gap-1">
+                                <div className="text-[11px] font-semibold flex items-center gap-1 text-gray-900 dark:text-gray-100">
                                   <span>{seatId}</span>
                                   {seatInfo?.taRequested && isTodaySeat && (
                                     <span>👋</span>
                                   )}
                                 </div>
 
-                                <div className="text-[10px] text-center px-1 truncate w-full">
+                                <div className="text-[10px] text-center px-1 truncate w-full text-gray-900 dark:text-gray-100">
                                   {mainLine || ''}
                                 </div>
 
-                                <div className="text-[10px] text-center text-gray-700">
+                                <div className="text-[10px] text-center text-gray-700 dark:text-gray-300">
                                   {subLine}
                                 </div>
 
                                 {taLine && (
-                                  <div className="text-[10px] text-center text-rose-700 font-semibold">
+                                  <div className="text-[10px] text-center text-rose-700 dark:text-rose-300 font-semibold">
                                     {taLine}
                                   </div>
                                 )}
@@ -983,7 +1008,7 @@ export default function TeacherPage() {
               </div>
             </div>
 
-            <div className="text-[10px] text-gray-500 mt-1">
+            <div className="text-[10px] text-gray-500 dark:text-gray-400 mt-1">
               ・本日の履歴のみを対象としています（前日以前のデータは座席ビューには表示されません）。<br />
               ・問題フィルタ「すべて」のとき：各座席の本日分の問題タイトルと経過時間を表示します。<br />
               ・特定の問題でフィルタしたとき：その問題に取り組んでいる座席だけを表示し、経過時間で色分けします。<br />
@@ -992,7 +1017,7 @@ export default function TeacherPage() {
             </div>
 
             {/* ★ デバッグパネル（一般利用では非表示。必要なときだけコメントアウトを外す） */}
-            {/* 
+            {/*
             {debugSeatId && (
               <div className="mt-2 border-t pt-2 text-[10px] text-gray-700">
                 <div className="flex items-center justify-between mb-1">
@@ -1031,10 +1056,10 @@ export default function TeacherPage() {
           {/* ★ 統合ログ一覧（選択日分） */}
           <section className="space-y-2">
             <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2 mb-1">
-              <h2 className="font-semibold text-sm">
+              <h2 className="font-semibold text-sm text-gray-900 dark:text-gray-100">
                 ログ一覧（選択日: {logDateYMD}・チャット＋採点提出）
               </h2>
-              <div className="flex flex-col items-start md:items-end gap-1 text-xs text-gray-500">
+              <div className="flex flex-col items-start md:items-end gap-1 text-xs text-gray-500 dark:text-gray-400">
                 <span>
                   {anyLoading
                     ? '読み込み中...'
@@ -1045,14 +1070,14 @@ export default function TeacherPage() {
 
             {/* ★ 座席フィルタ中の目立つバー＋解除ボタン */}
             {selectedSeatForHistory && (
-              <div className="mb-2 flex items-center justify-between border rounded bg-blue-50 px-3 py-1 text-[11px] text-blue-900">
+              <div className="mb-2 flex items-center justify-between border rounded bg-blue-50 dark:bg-blue-950/40 px-3 py-1 text-[11px] text-blue-900 dark:text-blue-200 border-blue-200 dark:border-blue-900">
                 <span>
                   座席{' '}
                   <span className="font-semibold">{selectedSeatForHistory}</span>{' '}
                   のログのみ表示しています。もう一度座席をクリックすると全体表示に戻ります。
                 </span>
                 <button
-                  className="border border-blue-400 rounded px-2 py-0.5 bg-white text-blue-700 hover:bg-blue-50"
+                  className="border border-blue-400 dark:border-blue-700 rounded px-2 py-0.5 bg-white dark:bg-gray-950 text-blue-700 dark:text-blue-200 hover:bg-blue-50 dark:hover:bg-blue-950/60"
                   onClick={() => setSelectedSeatForHistory(null)}
                 >
                   フィルタ解除
@@ -1061,7 +1086,7 @@ export default function TeacherPage() {
             )}
 
             {unifiedEntries.length === 0 && !anyLoading && (
-              <div className="text-xs text-gray-500 border rounded p-3 bg-white">
+              <div className="text-xs text-gray-500 dark:text-gray-400 border rounded p-3 bg-white dark:bg-gray-950 border-gray-200 dark:border-gray-800">
                 選択日で条件に一致するログがありません。
               </div>
             )}
@@ -1076,59 +1101,63 @@ export default function TeacherPage() {
                   return (
                     <details
                       key={`chat-${log.id}`}
-                      className="border rounded bg-white text-xs"
+                      className="border rounded bg-white dark:bg-gray-950 text-xs border-gray-200 dark:border-gray-800"
                     >
                       <summary className="px-3 py-2 cursor-pointer flex items-center justify-between gap-3">
                         <div className="flex flex-col gap-1 min-w-0">
                           <div className="flex flex-wrap gap-2 items-center">
-                            <span className="font-semibold truncate max-w-[18rem]">
+                            <span className="font-semibold truncate max-w-[18rem] text-gray-900 dark:text-gray-100">
                               {log.problemTitle || '(問題タイトル未設定)'}
                             </span>
-                            <span className="px-1.5 py-0.5 rounded border bg-blue-50">
+                            <span className="px-1.5 py-0.5 rounded border bg-blue-50 dark:bg-blue-950/40 border-blue-200 dark:border-blue-900 text-gray-900 dark:text-gray-100">
                               チャット
                             </span>
                             {log.seatNumber && (
-                              <span className="px-1.5 py-0.5 rounded border bg-gray-50">
+                              <span className="px-1.5 py-0.5 rounded border bg-gray-50 dark:bg-gray-900 border-gray-200 dark:border-gray-800 text-gray-900 dark:text-gray-100">
                                 座席: {log.seatNumber}
                               </span>
                             )}
                             {log.questionType && (
-                              <span className="px-1.5 py-0.5 rounded border bg-blue-50">
+                              <span className="px-1.5 py-0.5 rounded border bg-blue-50 dark:bg-blue-950/40 border-blue-200 dark:border-blue-900 text-gray-900 dark:text-gray-100">
                                 種類: {qtLabel}
                               </span>
                             )}
                             <span
                               className={`px-1.5 py-0.5 rounded border ${
                                 log.resolved
-                                  ? 'bg-emerald-50 border-emerald-300 text-emerald-700'
-                                  : 'bg-amber-50 border-amber-300 text-amber-800'
+                                  ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-300 dark:border-emerald-900 text-emerald-700 dark:text-emerald-200'
+                                  : 'bg-amber-50 dark:bg-amber-950/40 border-amber-300 dark:border-amber-900 text-amber-800 dark:text-amber-200'
                               }`}
                             >
                               {log.resolved ? '解決' : '未解決'}
                             </span>
                           </div>
-                          <div className="text-[11px] text-gray-500 flex flex-wrap gap-2">
+                          <div className="text-[11px] text-gray-500 dark:text-gray-400 flex flex-wrap gap-2">
                             <span>{formatDateTime(log.createdAt)}</span>
                             {typeof log.durationSec === 'number' && (
                               <span>着席〜質問まで: {secondsToMin(log.durationSec)}</span>
                             )}
                           </div>
-                          <div className="text-[11px] text-gray-700 truncate">
+                          <div className="text-[11px] text-gray-700 dark:text-gray-300 truncate">
                             {log.userMessage.replace(/\s+/g, ' ').slice(0, 80)}
                             {log.userMessage.length > 80 && '...'}
                           </div>
                         </div>
                       </summary>
-                      <div className="border-t px-3 py-2 grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <div className="border-t px-3 py-2 grid grid-cols-1 md:grid-cols-2 gap-3 border-gray-200 dark:border-gray-800">
                         <div className="space-y-1">
-                          <div className="font-semibold text-gray-700">学生の質問</div>
-                          <pre className="whitespace-pre-wrap text-[11px] bg-gray-50 rounded p-2 overflow-auto max-h-64">
+                          <div className="font-semibold text-gray-700 dark:text-gray-200">
+                            学生の質問
+                          </div>
+                          <pre className="whitespace-pre-wrap text-[11px] bg-gray-50 dark:bg-gray-900 rounded p-2 overflow-auto max-h-64 text-gray-900 dark:text-gray-100">
                             {log.userMessage}
                           </pre>
                         </div>
                         <div className="space-y-1">
-                          <div className="font-semibold text-gray-700">アシスタントの回答</div>
-                          <pre className="whitespace-pre-wrap text-[11px] bg-gray-50 rounded p-2 overflow-auto max-h-64">
+                          <div className="font-semibold text-gray-700 dark:text-gray-200">
+                            アシスタントの回答
+                          </div>
+                          <pre className="whitespace-pre-wrap text-[11px] bg-gray-50 dark:bg-gray-900 rounded p-2 overflow-auto max-h-64 text-gray-900 dark:text-gray-100">
                             {log.assistantMessage}
                           </pre>
                         </div>
@@ -1142,25 +1171,25 @@ export default function TeacherPage() {
                 return (
                   <details
                     key={`grading-${s.id}`}
-                    className="border rounded bg-white text-xs"
+                    className="border rounded bg-white dark:bg-gray-950 text-xs border-gray-200 dark:border-gray-800"
                   >
                     <summary className="px-3 py-2 cursor-pointer flex items-center justify-between gap-3">
                       <div className="flex flex-col gap-1 min-w-0">
                         <div className="flex flex-wrap items-center gap-2">
-                          <span className="font-semibold truncate max-w-[18rem]">
+                          <span className="font-semibold truncate max-w-[18rem] text-gray-900 dark:text-gray-100">
                             {s.problemTitle || '(問題タイトル未設定)'}
                           </span>
-                          <span className="px-1.5 py-0.5 rounded border bg-green-50 border-green-300 text-green-700">
+                          <span className="px-1.5 py-0.5 rounded border bg-green-50 dark:bg-green-950/40 border-green-300 dark:border-green-900 text-green-700 dark:text-green-200">
                             採点提出
                           </span>
                           {s.seatNumber && (
-                            <span className="px-1.5 py-0.5 rounded border bg-gray-50">
+                            <span className="px-1.5 py-0.5 rounded border bg-gray-50 dark:bg-gray-900 border-gray-200 dark:border-gray-800 text-gray-900 dark:text-gray-100">
                               座席: {s.seatNumber}
                             </span>
                           )}
                           {/* 種別・入力方法のタグは表示しない（内部的には保持） */}
                         </div>
-                        <div className="text-[11px] text-gray-500 flex flex-wrap gap-2">
+                        <div className="text-[11px] text-gray-500 dark:text-gray-400 flex flex-wrap gap-2">
                           <span>{formatDateTime(s.submittedAt)}</span>
                           {typeof s.durationSec === 'number' && (
                             <span>着席〜提出まで: {secondsToMin(s.durationSec)}</span>
@@ -1168,7 +1197,7 @@ export default function TeacherPage() {
                           <span>ファイル数: {s.files?.length ?? 0}</span>
                         </div>
                         {s.gradingResult && (
-                          <div className="text-[11px] text-gray-700 truncate">
+                          <div className="text-[11px] text-gray-700 dark:text-gray-300 truncate">
                             {s.gradingResult.replace(/\s+/g, ' ').slice(0, 80)}
                             {s.gradingResult.length > 80 && '...'}
                           </div>
@@ -1176,19 +1205,19 @@ export default function TeacherPage() {
                       </div>
                     </summary>
 
-                    <div className="border-t px-3 py-2 space-y-2">
+                    <div className="border-t px-3 py-2 space-y-2 border-gray-200 dark:border-gray-800">
                       {/* ★ 生成AIの出力内容 */}
                       {s.gradingResult ? (
                         <div className="space-y-1">
-                          <div className="font-semibold text-gray-700">
+                          <div className="font-semibold text-gray-700 dark:text-gray-200">
                             生成AIの採点結果
                           </div>
-                          <pre className="whitespace-pre-wrap text-[11px] bg-gray-50 rounded p-2 overflow-auto max-h-64">
+                          <pre className="whitespace-pre-wrap text-[11px] bg-gray-50 dark:bg-gray-900 rounded p-2 overflow-auto max-h-64 text-gray-900 dark:text-gray-100">
                             {s.gradingResult}
                           </pre>
                         </div>
                       ) : (
-                        <div className="text-[11px] text-gray-500">
+                        <div className="text-[11px] text-gray-500 dark:text-gray-400">
                           採点結果（gradingResult）が記録されていません。
                         </div>
                       )}
@@ -1196,18 +1225,22 @@ export default function TeacherPage() {
                       {/* ファイル一覧 */}
                       {s.files && s.files.length > 0 ? (
                         <div className="space-y-1">
-                          <div className="font-semibold text-gray-700">提出ファイル</div>
+                          <div className="font-semibold text-gray-700 dark:text-gray-200">
+                            提出ファイル
+                          </div>
                           <ul className="list-disc pl-5 space-y-1">
                             {s.files.map((f, i) => (
-                              <li key={i}>
+                              <li key={i} className="text-gray-900 dark:text-gray-100">
                                 <span className="mr-2">{f.name}</span>
-                                <span className="mr-2 text-gray-500">{f.size}B</span>
+                                <span className="mr-2 text-gray-500 dark:text-gray-400">
+                                  {f.size}B
+                                </span>
                                 {f.downloadURL && (
                                   <a
                                     href={f.downloadURL}
                                     target="_blank"
                                     rel="noreferrer"
-                                    className="text-blue-600 underline"
+                                    className="text-blue-600 dark:text-blue-300 underline"
                                   >
                                     開く
                                   </a>
@@ -1217,7 +1250,7 @@ export default function TeacherPage() {
                           </ul>
                         </div>
                       ) : (
-                        <div className="text-[11px] text-gray-500">
+                        <div className="text-[11px] text-gray-500 dark:text-gray-400">
                           ファイル情報が記録されていません。
                         </div>
                       )}
