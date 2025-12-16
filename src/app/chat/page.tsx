@@ -1,4 +1,4 @@
-// src/app/chat/page.tsx (1/2)
+// src/app/chat/page.tsx
 'use client'
 
 import React, {
@@ -20,6 +20,26 @@ import { db, auth } from '@/lib/firebase'
 
 // Storage（提出原本の保存）
 import { getStorage, ref as sRef, uploadString, getDownloadURL } from 'firebase/storage'
+
+/* ================== テーマ（dark/light） ================== */
+const THEME_KEY = 'theme' // 'light' | 'dark' | 'system'
+
+function applyTheme(theme: 'light' | 'dark' | 'system') {
+  const root = document.documentElement
+  const prefersDark = window.matchMedia?.('(prefers-color-scheme: dark)').matches
+  const shouldDark = theme === 'dark' || (theme === 'system' && prefersDark)
+  root.classList.toggle('dark', !!shouldDark)
+}
+
+function readTheme(): 'light' | 'dark' | 'system' {
+  const t = (localStorage.getItem(THEME_KEY) || 'system') as any
+  if (t === 'light' || t === 'dark' || t === 'system') return t
+  return 'system'
+}
+
+function writeTheme(t: 'light' | 'dark' | 'system') {
+  localStorage.setItem(THEME_KEY, t)
+}
 
 /* ================== 座席番号 正規化・取得を堅牢化 ================== */
 function normalizeSeatNumber(input: any): string | null {
@@ -130,6 +150,9 @@ const AutoGrowTextarea = forwardRef<HTMLTextAreaElement, AutoGrowProps>(function
         'w-full border rounded font-mono leading-6 shadow-inner',
         'min-h-[10rem] resize-y overflow-auto',
         'focus:outline-none focus:ring-2 focus:ring-blue-400',
+        // ✅ light/dark 両対応
+        'bg-white text-gray-900 border-gray-300',
+        'dark:bg-gray-900 dark:text-gray-100 dark:border-gray-700',
         className,
       ].join(' ')}
       {...rest}
@@ -405,40 +428,70 @@ function describeQuestionMode(q: QuestionTypeForLog): string {
 const KW_H = /(重要|ポイント|要件|仕様|条件|制約|注意|入力|出力|手順|実装手順|目的|ヒント|制限|例|例外|評価|採点)/
 const LINE_L = /^(入力|出力|条件|制約|注意|目的|手順|実装手順|ポイント|重要)[:：]/
 const normalize = (t: string) => (t || '').replace(/\r\n?/g, '\n')
+
 function highlightInline(line: string): ReactNode[] {
   if (!line) return ['']
   const out: ReactNode[] = []; let last = 0; const g = new RegExp(KW_H.source, 'g'); let m: RegExpExecArray | null
   while ((m = g.exec(line))) {
     if (m.index > last) out.push(line.slice(last, m.index))
-    out.push(<mark key={`${m.index}-${m[0]}`} className="bg-transparent text-rose-600 font-semibold">{m[0]}</mark>)
+    out.push(
+      <mark
+        key={`${m.index}-${m[0]}`}
+        className="bg-transparent text-rose-700 font-semibold dark:text-rose-300"
+      >
+        {m[0]}
+      </mark>
+    )
     last = m.index + m[0].length
   }
   if (last < line.length) out.push(line.slice(last))
   return out
 }
+
 function renderHighlightedDescription(desc: string) {
   const lines = normalize(desc).split('\n')
   type Block = { type: 'p'; text: string } | { type: 'ul'; items: string[] } | { type: 'ol'; items: string[] }
   const blocks: Block[] = []; let current: Block | null = null
   const push = () => { if (current) blocks.push(current); current = null }
+
   for (const raw of lines) {
     const line = raw.trim()
     if (!line) { push(); blocks.push({ type: 'p', text: '' }); continue }
     const step = line.match(/^(\d+)[\.\)\}]?[ 　、．)](.*)$/)
-    if (step) { const body = (step[2] || '').trim(); if (!current || current.type !== 'ol') { push(); current = { type: 'ol', items: [] } } ; current.items.push(body); continue }
-    if (/^[-–—*・※]\s+/.test(line)) { const body = line.replace(/^[-–—*・※]\s+/, ''); if (!current || current.type !== 'ul') { push(); current = { type: 'ul', items: [] } } ; current.items.push(body); continue }
+    if (step) {
+      const body = (step[2] || '').trim()
+      if (!current || current.type !== 'ol') { push(); current = { type: 'ol', items: [] } }
+      current.items.push(body); continue
+    }
+    if (/^[-–—*・※]\s+/.test(line)) {
+      const body = line.replace(/^[-–—*・※]\s+/, '')
+      if (!current || current.type !== 'ul') { push(); current = { type: 'ul', items: [] } }
+      current.items.push(body); continue
+    }
     push(); blocks.push({ type: 'p', text: line })
   }
   push()
+
   return (
-    <div className="text-sm leading-relaxed whitespace-pre-wrap break-words">
+    <div className="text-sm leading-relaxed whitespace-pre-wrap break-words text-gray-900 dark:text-gray-100">
       {blocks.map((b, i) =>
         b.type === 'ul' ? (
-          <ul key={`ul-${i}`} className="list-disc pl-5 my-1 space-y-0.5">{b.items.map((it, j) => <li key={j}>{highlightInline(it)}</li>)}</ul>
+          <ul key={`ul-${i}`} className="list-disc pl-5 my-1 space-y-0.5">
+            {b.items.map((it, j) => <li key={j}>{highlightInline(it)}</li>)}
+          </ul>
         ) : b.type === 'ol' ? (
-          <ol key={`ol-${i}`} className="list-decimal pl-5 my-1.space-y-0.5">{b.items.map((it, j) => <li key={j}>{highlightInline(it)}</li>)}</ol>
+          <ol key={`ol-${i}`} className="list-decimal pl-5 my-1 space-y-0.5">
+            {b.items.map((it, j) => <li key={j}>{highlightInline(it)}</li>)}
+          </ol>
         ) : (
-          <p key={`p-${i}`} className={KW_H.test(b.text) || LINE_L.test(b.text) ? 'py-0.5 pl-2 border-l-4 border-rose-300/70 text-gray-900' : 'py-0.5'}>
+          <p
+            key={`p-${i}`}
+            className={
+              KW_H.test(b.text) || LINE_L.test(b.text)
+                ? 'py-0.5 pl-2 border-l-4 border-rose-300/70 text-gray-900 dark:text-gray-100'
+                : 'py-0.5 text-gray-900 dark:text-gray-100'
+            }
+          >
             {highlightInline(b.text)}
           </p>
         )
@@ -450,19 +503,18 @@ function renderHighlightedDescription(desc: string) {
 /* ===== 課題文ほぼコピペ検知用ユーティリティ ===== */
 const normalizeForCompare = (text: string): string =>
   (text || '')
-    .replace(/\s/g, '')                // 空白・改行をすべて削除
-    .replace(/[。、，,.]/g, '')        // 句読点もざっくり削る
+    .replace(/\s/g, '')
+    .replace(/[。、，,.]/g, '')
 
 function looksLikeProblemCopy(desc: string, input: string): boolean {
   const a = normalizeForCompare(desc)
   const b = normalizeForCompare(input)
 
-  // 問題文が短すぎる / 入力が短すぎる場合は判定しない
   if (a.length < 200) return false
   if (b.length < 80) return false
 
-  const CHUNK = 60   // 1チャンクの長さ
-  const STEP  = 30   // スライド幅
+  const CHUNK = 60
+  const STEP  = 30
 
   let hitLen = 0
 
@@ -473,9 +525,7 @@ function looksLikeProblemCopy(desc: string, input: string): boolean {
     }
   }
 
-  const overlapRatio = hitLen / b.length // 入力全体のうち、何割が課題文と一致しているか
-
-  // 例: 入力の 60%以上が課題文由来なら「ほぼそのまま」とみなす
+  const overlapRatio = hitLen / b.length
   return overlapRatio >= 0.6
 }
 
@@ -562,7 +612,6 @@ function prettyCodeAuto(code: string): string {
 /** 抽象化コードであることを先頭コメントで明示する（すでに入っていれば何もしない） */
 function ensureAbstractComment(code: string): string {
   const trimmed = code.trimStart()
-  // すでに「抽象化コード例」系のコメントが入っていればそのまま
   if (/抽象化コード例|抽象化テンプレート/.test(trimmed)) {
     return code
   }
@@ -614,7 +663,7 @@ function extractIdentifiersFromSolutionFiles(files: { code: string }[] | undefin
       const lower = id.toLowerCase()
       if (IDENT_KEYWORDS.has(lower)) continue
       if (id.length <= 1) continue
-      if (/^[A-Z_]+$/.test(id)) continue // 定数っぽい全大文字は除外
+      if (/^[A-Z_]+$/.test(id)) continue
       ids.add(id)
       if (ids.size >= 120) break
     }
@@ -661,19 +710,17 @@ function extractFromSource(code: string, intent: ExtractIntent): string {
   let m: RegExpExecArray | null
   while ((m = blockRegex.exec(classBody)) !== null) {
     const header = (m[1] || '').trim()
-    the: {
-      const name   = (m[2] || '').trim()
-      const params = (m[3] || '')
-      let i = m.index + m[0].length
-      let depth = 1
-      while (i < classBody.length && depth > 0) {
-        const ch = classBody[i++]
-        if (ch === '{') depth++
-        else if (ch === '}') depth--
-      }
-      const block = classBody.slice(m.index, i)
-      blocks.push({ header, name, params, block })
+    const name   = (m[2] || '').trim()
+    const params = (m[3] || '')
+    let i = m.index + m[0].length
+    let depth = 1
+    while (i < classBody.length && depth > 0) {
+      const ch = classBody[i++]
+      if (ch === '{') depth++
+      else if (ch === '}') depth--
     }
+    const block = classBody.slice(m.index, i)
+    blocks.push({ header, name, params, block })
   }
 
   const ctorBlocks: string[] = []
@@ -725,7 +772,7 @@ function getBestCodeBlock(md: string, preferLang?: string | null): { lang: strin
 
 function guessStudentIdFromEmail(email?: string | null): string | null {
   if (!email) return null
-  const m = email.match(/\d{7,}/)   // メール中の 7桁以上の数字を学籍番号候補として抽出
+  const m = email.match(/\d{7,}/)
   return m ? m[0] : null
 }
 
@@ -821,8 +868,6 @@ async function streamChat(
   return full;
 }
 
-// src/app/chat/page.tsx (2/2)
-
 /* ================== 画面コンポーネント ================== */
 export default function ChatPage() {
   const [allMessages, setAllMessages] = useState<{ [problemId: string]: Message[] }>({})
@@ -840,20 +885,20 @@ export default function ChatPage() {
   const stepTextareaRef = useRef<HTMLTextAreaElement | null>(null)
 
   // 課題の読み解き・進め方（4項目）
-  const [taskWhere, setTaskWhere] = useState('')         // １：どの課題・どこで止まっているか
-  const [taskUnderstand, setTaskUnderstand] = useState('') // ２：自分なりの理解
-  const [taskStuck, setTaskStuck] = useState('')         // ３：どこで詰まっているか
-  const [taskCode, setTaskCode] = useState('')           // ４：今書いているコード全体
+  const [taskWhere, setTaskWhere] = useState('')
+  const [taskUnderstand, setTaskUnderstand] = useState('')
+  const [taskStuck, setTaskStuck] = useState('')
+  const [taskCode, setTaskCode] = useState('')
 
-  // エラー相談（2項目：テンプレ順に合わせる）
-  const [errMessage, setErrMessage] = useState('') // １：エラーメッセージ全文
-  const [errCode, setErrCode] = useState('')       // ２：実行したコード（全部）
+  // エラー相談（2項目）
+  const [errMessage, setErrMessage] = useState('')
+  const [errCode, setErrCode] = useState('')
 
   // 文法・書き方相談（2項目）
-  const [hintQuestion, setHintQuestion] = useState('') // １：使いたいものの名前
-  const [hintCode, setHintCode] = useState('')         // ２：どう動かしたいか（目的）
+  const [hintQuestion, setHintQuestion] = useState('')
+  const [hintCode, setHintCode] = useState('')
 
-  // コードレビュー相談（3項目：テンプレ通り）
+  // コードレビュー相談（3項目）
   const [reviewCode, setReviewCode] = useState('')
   const [reviewExpected, setReviewExpected] = useState('')
   const [reviewActual, setReviewActual] = useState('')
@@ -874,15 +919,29 @@ export default function ChatPage() {
   // ===== 解決確認 =====
   const [waitingFeedback, setWaitingFeedback] = useState(false)
   const [lastAssistantIndex, setLastAssistantIndex] = useState<number | null>(null)
-  // 20分・30分・40分コメントなどの「ナッジ」をためておくキュー
   const [pendingNudges, setPendingNudges] = useState<string[]>([])
 
   // ===== seatNumber / studentId 初期取得 & ログイン時の全タイマーリセット =====
   const [seatNumber, setSeatNumber] = useState<string | null>(null)
-  const [studentId, setStudentId] = useState<string | null>(null)       // ★ 学籍番号
-  const [studentDocId, setStudentDocId] = useState<string | null>(null) // ★ students ドキュメントID
-  // TA呼び出し状態（この問題について TA を呼んだか）
+  const [studentId, setStudentId] = useState<string | null>(null)
+  const [studentDocId, setStudentDocId] = useState<string | null>(null)
   const [taRequested, setTaRequested] = useState(false)
+
+  // ===== theme =====
+  const [theme, setTheme] = useState<'light' | 'dark' | 'system'>('system')
+  useEffect(() => {
+    const t = readTheme()
+    setTheme(t)
+    applyTheme(t)
+
+    const mq = window.matchMedia?.('(prefers-color-scheme: dark)')
+    if (!mq) return
+    const onChange = () => {
+      if (readTheme() === 'system') applyTheme('system')
+    }
+    mq.addEventListener?.('change', onChange)
+    return () => mq.removeEventListener?.('change', onChange)
+  }, [])
 
   useEffect(() => {
     setSeatNumber(getSeatNumberFromStorage())
@@ -1146,9 +1205,9 @@ export default function ChatPage() {
     updateStudentTaRequest(false)
   }
 
-  const NUDGE_FIRST = 2 * 60
-  const NUDGE_SECOND = 3 * 60
-  const TA_CALL_THRESHOLD_SEC = 4 * 60
+  const NUDGE_FIRST = 20 * 60
+  const NUDGE_SECOND = 30 * 60
+  const TA_CALL_THRESHOLD_SEC = 40 * 60
 
   useEffect(() => {
     if (!problem) return
@@ -1314,7 +1373,7 @@ export default function ChatPage() {
     placeholder?: string
     value: string
     setValue: (v: string) => void
-    highlight?: boolean   // ★ 強調用（赤字にするか）
+    highlight?: boolean
   }
 
   const questionTitle = useMemo(() => {
@@ -1604,7 +1663,6 @@ export default function ChatPage() {
   const isQuestionValid = useMemo(() => {
     switch (questionMode) {
       case 'task':
-        // ①どの課題か ＋ ③どこで詰まっているか は必須、コードは任意
         return !!taskWhere.trim() && !!taskStuck.trim()
       case 'error':
         return !!errMessage.trim() && !!errCode.trim()
@@ -1933,28 +1991,6 @@ ${outputRule(lang)}`
     setLastAssistantIndex(null)
   }
 
-  const formatMessageContent = (content: string): (string | { code: string })[] => {
-    const regex = /```(?:[a-zA-Z0-9#+-]*)?\n([\s\S]*?)```/g
-    const parts: (string | { code: string })[] = []
-    let last = 0
-    let match: RegExpExecArray | null
-    while ((match = regex.exec(content))) {
-      if (match.index > last) parts.push(content.slice(last, match.index))
-      const raw = match[1] ?? ''
-      parts.push({ code: prettyCodeAuto(raw) })
-      last = regex.lastIndex
-    }
-    if (last < content.length) parts.push(content.slice(last))
-    return parts
-  }
-
-  useEffect(
-    () => {
-      bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-    },
-    [messages, waitingFeedback]
-  )
-
   const [uploads, setUploads] = useState<{ name: string; size: number; text: string }[]>([])
   const [gradingSaving, setGradingSaving] = useState(false)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
@@ -2171,49 +2207,65 @@ ${filesForPrompt}
 
   return (
     <>
-      <main className="flex h-screen">
+      <main className="flex h-screen bg-white text-gray-900 dark:bg-gray-950 dark:text-gray-100">
         {/* 左：問題リスト */}
-        <div className="w-1/3 bg-gray-50 border-r p-4 overflow-y-auto">
+        <div className="w-1/3 border-r p-4 overflow-y-auto
+                        bg-gray-50 text-gray-900 border-gray-200
+                        dark:bg-gray-900 dark:text-gray-100 dark:border-gray-800">
           <h2 className="font-bold mb-2">問題を選択</h2>
           {visibleProblems.map((p) => (
             <button
               key={p.id}
               onClick={() => handleSelectProblem(p)}
-              className={`block w-full text-left p-2 mb-2 rounded ${
-                problem?.id === p.id ? 'bg-blue-100' : 'hover:bg-blue-50'
-              }`}
+              className={`block w-full text-left p-2 mb-2 rounded border
+                ${problem?.id === p.id
+                  ? 'bg-blue-100 border-blue-200 dark:bg-blue-900/35 dark:border-blue-800'
+                  : 'bg-transparent border-transparent hover:bg-blue-50 dark:hover:bg-gray-800'
+                }`}
             >
               {p.title}
             </button>
           ))}
-          <div className="mt-4 border-t pt-3">
-            <h3 className="font-semibold text-sm text-gray-700 mb-2">選択中の問題</h3>
+          <div className="mt-4 border-t pt-3 border-gray-200 dark:border-gray-800">
+            <h3 className="font-semibold text-sm text-gray-700 dark:text-gray-200 mb-2">選択中の問題</h3>
             {problem ? (
-              <div className="bg-white border rounded p-3">
+              <div className="bg-white border rounded p-3 border-gray-200
+                              dark:bg-gray-950 dark:border-gray-800">
                 <div className="text-sm font-bold mb-2">{problem.title}</div>
                 {renderHighlightedDescription(problem.description || '（問題文が未設定です）')}
               </div>
             ) : (
-              <div className="text-xs text-gray-500">左のリストから問題を選んでください。</div>
+              <div className="text-xs text-gray-500 dark:text-gray-400">左のリストから問題を選んでください。</div>
             )}
           </div>
         </div>
 
         {/* 右：チャット */}
-        <div className="flex-1 p-4 flex flex-col">
+        <div className="flex-1 p-4 flex flex-col bg-white dark:bg-gray-950">
           <div className="flex items-center justify-between mb-2">
             <h1 className="text-xl font-bold">{problem?.title || '問題未選択'}</h1>
             <div className="flex items-center gap-3">
+              {/* theme toggle */}
               {studentId && (
-                <span className="text-xs px-2 py-1 rounded border bg-white">学籍: {studentId}</span>
+                <span className="text-xs px-2 py-1 rounded border
+                                 bg-white text-gray-700 border-gray-200
+                                 dark:bg-gray-900 dark:text-gray-100 dark:border-gray-700">
+                  学籍: {studentId}
+                </span>
               )}
 
               {seatNumber && (
-                <span className="text-xs px-2 py-1 rounded border bg-white">座席: {seatNumber}</span>
+                <span className="text-xs px-2 py-1 rounded border
+                                 bg-white text-gray-700 border-gray-200
+                                 dark:bg-gray-900 dark:text-gray-100 dark:border-gray-700">
+                  座席: {seatNumber}
+                </span>
               )}
 
               {problem && (
-                <span className="text-xs px-2 py-1 rounded border bg-white">
+                <span className="text-xs px-2 py-1 rounded border
+                                 bg-white text-gray-700 border-gray-200
+                                 dark:bg-gray-900 dark:text-gray-100 dark:border-gray-700">
                   ⏱ 継続: {fmtHMS(elapsedSec)}
                 </span>
               )}
@@ -2221,11 +2273,12 @@ ${filesForPrompt}
               {problem && elapsedSec >= TA_CALL_THRESHOLD_SEC && (
                 <button
                   type="button"
-                  className={`border px-2 py-1 rounded text-xs ${
-                    taRequested
-                      ? 'bg-rose-100 text-rose-700 hover:bg-rose-200'
-                      : 'bg-rose-50 hover:bg-rose-100'
-                  }`}
+                  className={`border px-2 py-1 rounded text-xs
+                    dark:border-gray-700
+                    ${taRequested
+                      ? 'bg-rose-100 text-rose-700 border-rose-200 hover:bg-rose-200 dark:bg-rose-900/30 dark:text-rose-200 dark:hover:bg-rose-900/45'
+                      : 'bg-rose-50 text-rose-800 border-rose-200 hover:bg-rose-100 dark:bg-rose-900/20 dark:text-rose-200 dark:hover:bg-rose-900/35'
+                    }`}
                   onClick={handleToggleTa}
                 >
                   {taRequested ? '👋 TA呼び出し中（クリックでキャンセル）' : 'TAを呼ぶ'}
@@ -2236,7 +2289,7 @@ ${filesForPrompt}
 
           <div className="flex items-center gap-4 mb-4">
             <div className="flex items-center gap-2">
-              <span className={!gradingMode ? 'font-bold' : 'text-gray-400'}>通常モード</span>
+              <span className={!gradingMode ? 'font-bold' : 'text-gray-400 dark:text-gray-500'}>通常モード</span>
               <label className="mx-2 relative inline-flex items-center cursor-pointer">
                 <input
                   type="checkbox"
@@ -2250,20 +2303,20 @@ ${filesForPrompt}
                 />
                 <div
                   className={`w-11 h-6 rounded-full transition-all ${
-                    waitingFeedback ? 'bg-gray-300' : 'bg-gray-200 peer-checked:bg-green-500'
+                    waitingFeedback ? 'bg-gray-300 dark:bg-gray-700' : 'bg-gray-200 dark:bg-gray-700 peer-checked:bg-green-500'
                   }`}
                 />
                 <div
-                  className={`absolute left-0.5 top-0.5 w-5 h-5 bg-white rounded-full shadow transition-all ${
+                  className={`absolute left-0.5 top-0.5 w-5 h-5 bg-white dark:bg-gray-100 rounded-full shadow transition-all ${
                     gradingMode ? 'translate-x-full' : ''
                   }`}
                 />
               </label>
-              <span className={gradingMode ? 'font-bold' : 'text-gray-400'}>採点モード</span>
+              <span className={gradingMode ? 'font-bold' : 'text-gray-400 dark:text-gray-500'}>採点モード</span>
             </div>
 
             {waitingFeedback && (
-              <span className="text-xs text-rose-600">
+              <span className="text-xs text-rose-600 dark:text-rose-300">
                 ※ 解決確認に回答するまで送信できません
               </span>
             )}
@@ -2274,9 +2327,12 @@ ${filesForPrompt}
             {messages.map((msg: Message, idx: number) => {
               const bubble = (
                 <div
-                  className={`p-3 rounded max-w-[75%] whitespace-pre-wrap break-words ${
-                    msg.role === 'user' ? 'bg-blue-100' : 'bg-green-50'
-                  }`}
+                  className={`p-3 rounded max-w-[75%] whitespace-pre-wrap break-words border
+                    ${
+                      msg.role === 'user'
+                        ? 'bg-blue-100 text-gray-900 border-blue-200 dark:bg-blue-900/35 dark:text-gray-100 dark:border-blue-800'
+                        : 'bg-emerald-50 text-gray-900 border-emerald-100 dark:bg-emerald-900/20 dark:text-gray-100 dark:border-emerald-800/40'
+                    }`}
                 >
                   {(() => {
                     const parts = (() => {
@@ -2305,7 +2361,9 @@ ${filesForPrompt}
                       ) : (
                         <pre
                           key={i}
-                          className="bg-gray-200 p-2 rounded overflow-x-auto text-sm"
+                          className="p-2 rounded overflow-x-auto text-sm border
+                                     bg-gray-100 border-gray-200
+                                     dark:bg-gray-900 dark:border-gray-800"
                         >
                           <code>{p.code}</code>
                         </pre>
@@ -2326,7 +2384,9 @@ ${filesForPrompt}
                     <div className="flex justify-start">{bubble}</div>
 
                     <div className="flex justify-start">
-                      <div className="bg-amber-50 border border-amber-200 text-amber-900 rounded px-3 py-2 text-sm flex items-center gap-2">
+                      <div className="border rounded px-3 py-2 text-sm flex items-center gap-2
+                                      bg-amber-50 border-amber-200 text-amber-900
+                                      dark:bg-amber-900/25 dark:border-amber-800 dark:text-amber-100">
                         <span>この回答で問題は解決できましたか？</span>
                         <button
                           className="px-2 py-1 rounded bg-emerald-600 text-white hover:opacity-90"
@@ -2360,7 +2420,8 @@ ${filesForPrompt}
 
           {/* 採点モードUI */}
           {problem && !waitingFeedback && gradingMode && (
-            <div className="mb-3 border rounded p-3 bg-slate-50 space-y-3">
+            <div className="mb-3 border rounded p-3 bg-slate-50 space-y-3
+                            dark:bg-gray-900 dark:border-gray-800">
               {/* …このあたりから下は元のまま（採点モードUI・通常モードUI） … */}
               {/* ここは変更していないので、元のファイルと同じ内容をそのまま使ってください */}
             </div>
@@ -2370,14 +2431,18 @@ ${filesForPrompt}
           {!gradingMode && (
             <div className="mt-4 space-y-3">
               <div className="flex flex-wrap items-center gap-2 text-xs">
-                <span className="text-gray-600">質問のパターンから選ぶ：</span>
+                <span className="text-gray-600 dark:text-gray-300">質問のパターンから選ぶ：</span>
 
                 <button
                   type="button"
                   className={`px-2 py-1 rounded border ${
                     questionMode === 'task'
-                      ? 'bg-orange-200'
-                      : 'bg-orange-50 hover:bg-orange-100'
+                      ? 'bg-orange-200 border-orange-300'
+                      : 'bg-orange-50 border-orange-200 hover:bg-orange-100'
+                  } dark:border-gray-700 ${
+                    questionMode === 'task'
+                      ? 'dark:bg-orange-900/25'
+                      : 'dark:bg-gray-900 dark:hover:bg-gray-800'
                   }`}
                   onClick={() => setQuestionMode('task')}
                   disabled={!problem || waitingFeedback || loading}
@@ -2389,8 +2454,12 @@ ${filesForPrompt}
                   type="button"
                   className={`px-2 py-1 rounded border ${
                     questionMode === 'syntax'
-                      ? 'bg-blue-200'
-                      : 'bg-blue-50 hover:bg-blue-100'
+                      ? 'bg-blue-200 border-blue-300'
+                      : 'bg-blue-50 border-blue-200 hover:bg-blue-100'
+                  } dark:border-gray-700 ${
+                    questionMode === 'syntax'
+                      ? 'dark:bg-blue-900/25'
+                      : 'dark:bg-gray-900 dark:hover:bg-gray-800'
                   }`}
                   onClick={() => setQuestionMode('syntax')}
                   disabled={!problem || waitingFeedback || loading}
@@ -2402,8 +2471,12 @@ ${filesForPrompt}
                   type="button"
                   className={`px-2 py-1 rounded border ${
                     questionMode === 'error'
-                      ? 'bg-red-200'
-                      : 'bg-red-50 hover:bg-red-100'
+                      ? 'bg-red-200 border-red-300'
+                      : 'bg-red-50 border-red-200 hover:bg-red-100'
+                  } dark:border-gray-700 ${
+                    questionMode === 'error'
+                      ? 'dark:bg-rose-900/25'
+                      : 'dark:bg-gray-900 dark:hover:bg-gray-800'
                   }`}
                   onClick={() => setQuestionMode('error')}
                   disabled={!problem || waitingFeedback || loading}
@@ -2415,8 +2488,12 @@ ${filesForPrompt}
                   type="button"
                   className={`px-2 py-1 rounded border ${
                     questionMode === 'review'
-                      ? 'bg-green-200'
-                      : 'bg-green-50 hover:bg-green-100'
+                      ? 'bg-green-200 border-green-300'
+                      : 'bg-green-50 border-green-200 hover:bg-green-100'
+                  } dark:border-gray-700 ${
+                    questionMode === 'review'
+                      ? 'dark:bg-emerald-900/25'
+                      : 'dark:bg-gray-900 dark:hover:bg-gray-800'
                   }`}
                   onClick={() => setQuestionMode('review')}
                   disabled={!problem || waitingFeedback || loading}
@@ -2428,8 +2505,12 @@ ${filesForPrompt}
                   type="button"
                   className={`px-2 py-1 rounded border ${
                     questionMode === 'algo'
-                      ? 'bg-yellow-200'
-                      : 'bg-yellow-50 hover:bg-yellow-100'
+                      ? 'bg-yellow-200 border-yellow-300'
+                      : 'bg-yellow-50 border-yellow-200 hover:bg-yellow-100'
+                  } dark:border-gray-700 ${
+                    questionMode === 'algo'
+                      ? 'dark:bg-yellow-900/25'
+                      : 'dark:bg-gray-900 dark:hover:bg-gray-800'
                   }`}
                   onClick={() => setQuestionMode('algo')}
                   disabled={!problem || waitingFeedback || loading}
@@ -2441,8 +2522,12 @@ ${filesForPrompt}
                   type="button"
                   className={`px-2 py-1 rounded border ${
                     questionMode === 'free'
-                      ? 'bg-purple-200'
-                      : 'bg-purple-50 hover:bg-purple-100'
+                      ? 'bg-purple-200 border-purple-300'
+                      : 'bg-purple-50 border-purple-200 hover:bg-purple-100'
+                  } dark:border-gray-700 ${
+                    questionMode === 'free'
+                      ? 'dark:bg-purple-900/25'
+                      : 'dark:bg-gray-900 dark:hover:bg-gray-800'
                   }`}
                   onClick={() => setQuestionMode('free')}
                   disabled={!problem || waitingFeedback || loading}
@@ -2452,30 +2537,31 @@ ${filesForPrompt}
               </div>
 
               {questionMode === 'none' && (
-                <div className="border rounded p-3 text-xs text-gray-600 bg-gray-50">
+                <div className="border rounded p-3 text-xs
+                                bg-gray-50 text-gray-700 border-gray-200
+                                dark:bg-gray-900 dark:text-gray-200 dark:border-gray-800">
                   まず上のボタンのどれかを選んでください。選んだ内容に応じて、1項目ずつ入力する画面が表示されます。
                 </div>
               )}
 
               {questionMode !== 'none' && (
-                <div className="border rounded p-3 bg-white space-y-3">
+                <div className="border rounded p-3 bg-white space-y-3 border-gray-200
+                                dark:bg-gray-950 dark:border-gray-800">
                   <div className="flex items-center justify-between text-xs">
                     <div className="font-semibold">{questionTitle}</div>
-                    <div className="text-gray-600">
+                    <div className="text-gray-600 dark:text-gray-300">
                       入力 {steps.length === 0 ? '0/0' : `${stepIndex + 1}/${steps.length}`}
                     </div>
                   </div>
 
                   {steps.length > 0 && (() => {
                     const totalSteps = steps.length
-                    // ★ ここで stepIndex を配列範囲内にクランプする
                     const clampedIndex = Math.min(stepIndex, totalSteps - 1)
                     const currentStep = steps[clampedIndex]
-                    const isLastStep = clampedIndex === totalSteps - 1
                     const canGoNext = clampedIndex < totalSteps - 1
 
                     const labelClass = `text-xs font-semibold whitespace-pre-wrap ${
-                      currentStep.highlight ? 'text-red-700' : ''
+                      currentStep.highlight ? 'text-red-700 dark:text-rose-300' : ''
                     }`
 
                     return (
@@ -2522,10 +2608,12 @@ ${filesForPrompt}
                         </div>
 
                         <div className="flex items-center justify-between text-xs mt-2">
-                          <div className="flex.items-center gap-2">
+                          <div className="flex items-center gap-2">
                             <button
                               type="button"
-                              className="px-2 py-1 rounded border hover:bg-gray-50"
+                              className="px-2 py-1 rounded border hover:bg-gray-50
+                                         border-gray-200 dark:border-gray-700
+                                         dark:hover:bg-gray-900"
                               onClick={() => setQuestionMode('none')}
                             >
                               ← パターン選択に戻る
@@ -2534,7 +2622,9 @@ ${filesForPrompt}
                               <>
                                 <button
                                   type="button"
-                                  className="px-2 py-1 rounded border hover:bg-gray-50 disabled:opacity-40"
+                                  className="px-2 py-1 rounded border hover:bg-gray-50 disabled:opacity-40
+                                             border-gray-200 dark:border-gray-700
+                                             dark:hover:bg-gray-900"
                                   onClick={() => setStepIndex((i) => Math.max(0, i - 1))}
                                   disabled={clampedIndex === 0}
                                 >
@@ -2542,7 +2632,9 @@ ${filesForPrompt}
                                 </button>
                                 <button
                                   type="button"
-                                  className="px-2 py-1 rounded border hover:bg-gray-50 disabled:opacity-40"
+                                  className="px-2 py-1 rounded border hover:bg-gray-50 disabled:opacity-40
+                                             border-gray-200 dark:border-gray-700
+                                             dark:hover:bg-gray-900"
                                   onClick={() =>
                                     setStepIndex((i) => Math.min(steps.length - 1, i + 1))
                                   }
