@@ -2420,10 +2420,180 @@ ${filesForPrompt}
 
           {/* 採点モードUI */}
           {problem && !waitingFeedback && gradingMode && (
-            <div className="mb-3 border rounded p-3 bg-slate-50 space-y-3
-                            dark:bg-gray-900 dark:border-gray-800">
-              {/* …このあたりから下は元のまま（採点モードUI・通常モードUI） … */}
-              {/* ここは変更していないので、元のファイルと同じ内容をそのまま使ってください */}
+            <div
+              className="mb-3 border rounded p-3 bg-slate-50 space-y-3
+                        dark:bg-gray-900 dark:border-gray-800"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-sm font-semibold">採点モード：提出を入力</div>
+                <div className="text-xs text-gray-600 dark:text-gray-300">
+                  {gradingSaving ? '保存中…' : loading ? '採点中…' : ''}
+                </div>
+              </div>
+
+              {/* 入力方式切替 */}
+              <div className="flex items-center gap-2 text-xs">
+                <button
+                  type="button"
+                  className={`px-2 py-1 rounded border ${
+                    gradingInputMode === 'files'
+                      ? 'bg-emerald-200 border-emerald-300'
+                      : 'bg-white border-gray-200 hover:bg-gray-50 dark:bg-gray-950 dark:border-gray-700 dark:hover:bg-gray-800'
+                  }`}
+                  onClick={() => setGradingInputMode('files')}
+                  disabled={loading || gradingSaving}
+                >
+                  📁 ファイル提出
+                </button>
+                <button
+                  type="button"
+                  className={`px-2 py-1 rounded border ${
+                    gradingInputMode === 'paste'
+                      ? 'bg-emerald-200 border-emerald-300'
+                      : 'bg-white border-gray-200 hover:bg-gray-50 dark:bg-gray-950 dark:border-gray-700 dark:hover:bg-gray-800'
+                  }`}
+                  onClick={() => setGradingInputMode('paste')}
+                  disabled={loading || gradingSaving}
+                >
+                  📋 貼り付け提出
+                </button>
+
+                <div className="ml-auto text-xs text-gray-600 dark:text-gray-300">
+                  ※ ここで送信すると「採点＋提出保存」まで行います
+                </div>
+              </div>
+
+              {/* files */}
+              {gradingInputMode === 'files' && (
+                <div className="space-y-2">
+                  <div
+                    className="border-2 border-dashed rounded p-4 text-sm
+                              bg-white border-gray-200 text-gray-700
+                              dark:bg-gray-950 dark:border-gray-700 dark:text-gray-200"
+                    onDragOver={(e) => e.preventDefault()}
+                    onDrop={handleDropOnFileZone}
+                  >
+                    <div className="font-semibold mb-1">ここに .java / .c / .cpp / .py / .ts などをドラッグ&ドロップ</div>
+                    <div className="text-xs mb-2 text-gray-600 dark:text-gray-300">
+                      または「ファイル選択」から追加できます（複数可）
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <input
+                        ref={fileInputRef}
+                        type="file"
+                        multiple
+                        className="hidden"
+                        onChange={(e) => {
+                          handlePickFiles(e.target.files)
+                          // 同じファイルを再選択できるようにする
+                          e.currentTarget.value = ''
+                        }}
+                      />
+                      <button
+                        type="button"
+                        className="px-3 py-2 rounded bg-blue-600 text-white text-xs hover:opacity-90 disabled:opacity-50"
+                        onClick={() => fileInputRef.current?.click()}
+                        disabled={loading || gradingSaving}
+                      >
+                        ファイル選択
+                      </button>
+
+                      <button
+                        type="button"
+                        className="px-3 py-2 rounded border text-xs
+                                  bg-white border-gray-200 hover:bg-gray-50
+                                  dark:bg-gray-950 dark:border-gray-700 dark:hover:bg-gray-800
+                                  disabled:opacity-50"
+                        onClick={() => setUploads([])}
+                        disabled={loading || gradingSaving || uploads.length === 0}
+                      >
+                        クリア
+                      </button>
+                    </div>
+                  </div>
+
+                  {uploads.length > 0 && (
+                    <div className="border rounded p-3 bg-white space-y-2 border-gray-200
+                                    dark:bg-gray-950 dark:border-gray-700">
+                      <div className="text-xs font-semibold">選択中のファイル</div>
+                      <div className="space-y-1">
+                        {uploads.map((u, idx) => (
+                          <div
+                            key={`${u.name}-${idx}`}
+                            className="flex items-center justify-between gap-2 text-xs border rounded px-2 py-1
+                                      border-gray-200 bg-gray-50
+                                      dark:border-gray-700 dark:bg-gray-900"
+                          >
+                            <div className="truncate">
+                              <span className="font-mono">{u.name}</span>
+                              <span className="ml-2 text-gray-500 dark:text-gray-300">
+                                ({Math.round(u.size / 1024)} KB)
+                              </span>
+                            </div>
+                            <button
+                              type="button"
+                              className="px-2 py-1 rounded bg-rose-600 text-white hover:opacity-90 disabled:opacity-50"
+                              onClick={() => removeUpload(idx)}
+                              disabled={loading || gradingSaving}
+                            >
+                              削除
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* paste */}
+              {gradingInputMode === 'paste' && (
+                <div className="space-y-2">
+                  <div className="text-xs text-gray-700 dark:text-gray-200">
+                    複数ファイルでも、区切りを書いてまとめて貼ってOKです（例：// Main.java など）。
+                  </div>
+                  <AutoGrowTextarea
+                    ref={pasteTextareaRef as any}
+                    value={gradingPaste}
+                    onChange={(e) => setGradingPaste(e.target.value)}
+                    placeholder={'例）// Main.java\n...\n\n// Sub.java\n...'}
+                    maxVh={45}
+                    className="min-h-[12rem] rounded-xl"
+                    disabled={loading || gradingSaving}
+                  />
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      className="px-3 py-2 rounded border text-xs
+                                bg-white border-gray-200 hover:bg-gray-50
+                                dark:bg-gray-950 dark:border-gray-700 dark:hover:bg-gray-800
+                                disabled:opacity-50"
+                      onClick={() => setGradingPaste('')}
+                      disabled={loading || gradingSaving || !gradingPaste}
+                    >
+                      クリア
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* submit */}
+              <div className="flex items-center justify-end gap-2 pt-1">
+                <button
+                  type="button"
+                  className="px-4 py-2 rounded bg-emerald-600 text-white text-sm hover:opacity-90 disabled:opacity-50"
+                  onClick={handleGradingSubmit}
+                  disabled={
+                    loading ||
+                    gradingSaving ||
+                    !problem ||
+                    (gradingInputMode === 'files' ? uploads.length === 0 : !gradingPaste.trim())
+                  }
+                >
+                  {loading ? '採点中…' : '採点して保存'}
+                </button>
+              </div>
             </div>
           )}
 
