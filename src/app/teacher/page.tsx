@@ -13,7 +13,15 @@ import {
 } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
 
-type QuestionType = 'error' | 'syntax' | 'review' | 'algo' | 'free' | 'unknown'
+// ★ 画像2の分類に合わせて task を追加（値揺れは normalize で吸収）
+type QuestionType =
+  | 'task'
+  | 'writing'
+  | 'error'
+  | 'review'
+  | 'algo'
+  | 'free'
+  | 'unknown'
 
 type ChatLog = {
   id: string
@@ -69,14 +77,85 @@ type StudentSeat = {
   updatedAt?: Timestamp | null
 }
 
-// ★ 質問タイプ → 日本語ラベル
+// ★ 画像2の文言に「完全一致」させた日本語ラベル
 const QUESTION_TYPE_LABEL: Record<QuestionType, string> = {
+  task: '課題の読み解き・進め方',
+  writing: '書き方の相談',
   error: 'エラー・例外の相談',
-  syntax: '書き方の相談',
   review: 'コードレビュー・バグの相談',
   algo: 'アルゴリズム・理論の相談',
   free: '自由記述の相談',
   unknown: '（種類未入力）',
+}
+
+// ★ 値揺れ吸収（Firestore側が task 以外で入っていても Teacher 側で統一表示する）
+const normalizeQuestionType = (raw: any): QuestionType => {
+  const v = (raw ?? '').toString().trim().toLowerCase()
+  if (!v) return 'unknown'
+
+  // 画像2: 「課題の読み解き・進め方」
+  if (
+    v === 'task' ||
+    v === 'assignment' ||
+    v === 'homework' ||
+    v === 'problem' ||
+    v === 'reading' ||
+    v === 'read' ||
+    v === 'progress' ||
+    v === 'advance' ||
+    v === 'plan' ||
+    v === 'understand' ||
+    v === 'interpretation' ||
+    v === 'workflow'
+  ) {
+    return 'task'
+  }
+
+  // 画像2: 「書き方の相談」
+  if (
+    v === 'writing' ||
+    v === 'syntax' ||
+    v === 'howto' ||
+    v === 'how_to' ||
+    v === 'format' ||
+    v === 'style'
+  ) {
+    return 'writing'
+  }
+
+  // 画像2: 「エラー・例外の相談」
+  if (v === 'error' || v === 'exception' || v === 'runtime' || v === 'bug') {
+    return 'error'
+  }
+
+  // 画像2: 「コードレビュー・バグの相談」
+  if (
+    v === 'review' ||
+    v === 'code_review' ||
+    v === 'refactor' ||
+    v === 'debug' ||
+    v === 'logic'
+  ) {
+    return 'review'
+  }
+
+  // 画像2: 「アルゴリズム・理論の相談」
+  if (
+    v === 'algo' ||
+    v === 'algorithm' ||
+    v === 'theory' ||
+    v === 'complexity' ||
+    v === 'math'
+  ) {
+    return 'algo'
+  }
+
+  // 画像2: 「自由記述の相談」
+  if (v === 'free' || v === 'other' || v === 'misc') {
+    return 'free'
+  }
+
+  return 'unknown'
 }
 
 const getStartOfTodayLocal = (): Date => {
@@ -308,7 +387,8 @@ export default function TeacherPage() {
             durationSec: d.durationSec,
             userMode: d.userMode,
             answerMode: d.answerMode,
-            questionType: d.questionType ?? 'unknown',
+            // ★ ここで正規化（task などが来ても表示が空にならない）
+            questionType: normalizeQuestionType(d.questionType),
           })
         })
         setChatLogs(list)
@@ -453,12 +533,14 @@ export default function TeacherPage() {
   const filteredChatLogs = useMemo(() => {
     return chatLogs.filter((log) => {
       if (!isSameDay(log.createdAt, selectedDayMs)) return false
-      if (problemFilter !== 'all' && log.problemId !== problemFilter) return false
-      if (
-        questionTypeFilter !== 'all' &&
-        (log.questionType ?? 'unknown') !== questionTypeFilter
-      )
+      if (problemFilter !== 'all' && log.problemId !== problemFilter)
         return false
+
+      // ★ 比較も正規化済み値で行う（表示とフィルタを一致させる）
+      const qt = normalizeQuestionType(log.questionType)
+      if (questionTypeFilter !== 'all' && qt !== questionTypeFilter)
+        return false
+
       if (resolvedFilter === 'resolved' && !log.resolved) return false
       if (resolvedFilter === 'unresolved' && log.resolved) return false
 
@@ -733,8 +815,9 @@ export default function TeacherPage() {
               onChange={(e) => setQuestionTypeFilter(e.target.value as any)}
             >
               <option value="all">すべて</option>
+              <option value="task">課題の読み解き・進め方</option>
+              <option value="writing">書き方の相談</option>
               <option value="error">エラー・例外の相談</option>
-              <option value="syntax">書き方の相談</option>
               <option value="review">コードレビュー・バグの相談</option>
               <option value="algo">アルゴリズム・理論の相談</option>
               <option value="free">自由記述の相談</option>
@@ -841,7 +924,7 @@ export default function TeacherPage() {
                           key={block.id}
                           className={`grid gap-px border bg-gray-200 dark:bg-gray-800 ${offsetClass}`}
                           style={{
-                            gridTemplateColumns: `repeat(${block.cols.length}, 4rem)`,
+                            gridTemplateColumns: `repeat(${block.cols.length}, 4.5rem)`,
                           }}
                         >
                           {block.rows.map((row) =>
@@ -849,7 +932,8 @@ export default function TeacherPage() {
                               const seatId = `${col}${row}`
 
                               const seatInfo = studentSeatMap.get(seatId)
-                              const latestAny = seatLatestAnyProblemMap.get(seatId)
+                              const latestAny =
+                                seatLatestAnyProblemMap.get(seatId)
 
                               const currentProblemId =
                                 seatInfo?.currentProblemId ??
@@ -946,7 +1030,9 @@ export default function TeacherPage() {
                                   ? `${minutesToday}分経過`
                                   : ''
 
-                              let taLine = seatInfo?.taRequested ? 'TA呼び出し中' : ''
+                              let taLine = seatInfo?.taRequested
+                                ? 'TA呼び出し中'
+                                : ''
 
                               let isTodaySeat = false
                               if (isTodayByTimer) {
@@ -1138,7 +1224,8 @@ export default function TeacherPage() {
               {unifiedEntries.map((e) => {
                 if (e.kind === 'chat') {
                   const log = e
-                  const qtLabel = QUESTION_TYPE_LABEL[log.questionType ?? 'unknown']
+                  const qt = normalizeQuestionType(log.questionType)
+                  const qtLabel = QUESTION_TYPE_LABEL[qt] ?? QUESTION_TYPE_LABEL.unknown
 
                   return (
                     <details
@@ -1159,11 +1246,11 @@ export default function TeacherPage() {
                                 座席: {log.seatNumber}
                               </span>
                             )}
-                            {log.questionType && (
-                              <span className="px-1.5 py-0.5 rounded border bg-blue-50 dark:bg-blue-950/40 border-blue-200 dark:border-blue-900 text-gray-900 dark:text-gray-100">
-                                種類: {qtLabel}
-                              </span>
-                            )}
+                            {/* ★ 種類は必ず表示（task などでも空にならない） */}
+                            <span className="px-1.5 py-0.5 rounded border bg-blue-50 dark:bg-blue-950/40 border-blue-200 dark:border-blue-900 text-gray-900 dark:text-gray-100">
+                              種類: {qtLabel}
+                            </span>
+
                             <span
                               className={`px-1.5 py-0.5 rounded border ${
                                 log.resolved
