@@ -166,6 +166,10 @@ const BASE_TEACHER_PROMPT = (lang: string) => String.raw`
 学習者が「いま質問した箇所だけ」を対象に説明し、それ以外の部分は出力しない。  
 目的は、学習者が自分のコードの“どの位置に何を書くか”を理解すること。
 
+[文章構成ルール（最重要）]
+- 全ての回答は必ず「結論ファースト（結論→理由・説明）」の順序で記述してください。
+- 最初の1文目で、質問に対する直接的な答えや最も重要なポイント（結論）を端的に述べてください
+
 [出力範囲の制限（最重要）]
 - 学習者が質問した箇所以外の元素を出さない。
 - 「全体像」や「次に書く部分」を先回りして出さない。
@@ -176,8 +180,11 @@ const BASE_TEACHER_PROMPT = (lang: string) => String.raw`
 [コード出力ルール]
 - \`\`\`${lang}\`\`\` で、該当範囲のみ骨組みを出す。
 
-[出力形式]
-アドバイス: 3〜5文。  
+[出力形式（長文禁止・可読性重視）]
+アドバイス: 
+- 必ず「結論ファースト（結論→補足説明）」の順に書くこと。
+- 全体で3〜5文以内に収めること（長文禁止）。
+- 重要な用語は**太字**にし、適宜箇条書きや空行を使ってパッと見て読める工夫をすること。
 質問: 1つだけ（?で終える）。  
 コード例: 上記の抽象度/記法で。
 
@@ -278,15 +285,21 @@ const FREE_TEXT_PROMPT = String.raw`
 - 「こんにちは」「最近どうですか？」のようなあいさつ
 - 授業や課題への不安、勉強の進め方の相談など
 
+【文章構成ルール（最重要）】
+- 全ての回答は必ず「結論ファースト（結論→理由・説明）」の順序で記述してください。
+- 最初の1文目で、質問に対する直接的な答えや最も重要なポイント（結論）を端的に述べてください。
+
 【絶対に守るルール】
 - コードや疑似コード、数式のような「プログラムとして使えそうなもの」は一切書かない。
 - \`\`\` で囲んだコードブロックや、クラス名・メソッド名・変数名の例も出さない。
 - Markdown の箇条書き（「- 」「1. 」など）も使わず、普通の文章だけで答える。
 
-【出力形式】
-- 日本語で 3〜5 文程度にまとめる。
-- 1 行に 1 文を目安とし、**最大 5 行以内**に収める。
-- 学生の気持ちを受け止めつつ、「次にどうすると良さそうか」を軽く提案する。
+【出力形式（長文禁止・可読性重視）】
+- 全ての回答は必ず「結論ファースト（結論→補足説明）」の順に書くこと。
+- 日本語で 3〜5 文程度にまとめ、決して長文にしないこと。
+- 空行や箇条書きを含めても、全体で **最大 5〜7 行以内** に収めること。
+- 結論と補足の間に空行を入れる、重要な用語は**太字**にする、箇条書き（-）を使うなど、少ない文字数でもパッと見て理解できるよう視覚的に整理すること。
+- 学生の気持ちを受け止めつつ、「次にどうすると良さそうか」を軽く提案すること。
 `.trim()
 
 const buildAbstractionRulesForExample = (lang: string) => String.raw`
@@ -382,7 +395,7 @@ function fillTemplate(template: string, answers: string[]): string {
 }
 
 /* ===== 型 ===== */
-type QuestionMode = 'none' | 'task' | 'error' | 'syntax' | 'review' | 'algo' | 'free'
+type QuestionMode = 'none' | 'task' | 'error' | 'syntax' | 'review' | 'algo' | 'free' | 'basic'
 type QuestionTypeForLog = Exclude<QuestionMode, 'none'> | 'unknown'
 
 type Message = {
@@ -419,6 +432,8 @@ function describeQuestionMode(q: QuestionTypeForLog): string {
       return '理論・アルゴリズムの相談です。式の意味や処理の流れ・計算量など、概念的な理解を助けてください。'
     case 'free':
       return '自由記述の相談です。設計や学習の進め方など、学生の悩みに合わせて助言してください。'
+    case 'basic':
+      return '初歩的な質問・基礎概念（インスタンス、クラス、変数など）の相談です。初学者が理解しやすいように、専門用語を並べすぎず、身近な例えなどを用いて分かりやすく説明してください。'
     default:
       return '相談の種類は明示されていません。質問内容から適切に判断してください。'
   }
@@ -909,6 +924,9 @@ export default function ChatPage() {
   // 自由記述（1項目）
   const [freeText, setFreeText] = useState('')
 
+  // 初歩的な質問（1項目）
+  const [basicQuestion, setBasicQuestion] = useState('')
+
   // ===== 採点モード UI =====
   const [gradingInputMode, setGradingInputMode] = useState<'files' | 'paste'>('files')
   const [gradingPaste, setGradingPaste] = useState('')
@@ -1390,6 +1408,8 @@ export default function ChatPage() {
         return '理論・アルゴリズムの相談'
       case 'free':
         return '自由記述の相談'
+      case 'basic':
+        return '初歩的な質問'
       default:
         return ''
     }
@@ -1579,6 +1599,17 @@ export default function ChatPage() {
           },
         ]
 
+      case 'basic':
+        return [
+          {
+            key: 'basic-question',
+            label: '【初歩的な質問】\n\n分からない用語や概念（例：インスタンス、クラスなど）について教えてください。',
+            placeholder: '例）「インスタンス」とは何ですか？分かりやすく教えてください。',
+            value: basicQuestion,
+            setValue: setBasicQuestion,
+          },
+        ]  
+
       default:
         return []
     }
@@ -1597,6 +1628,7 @@ export default function ChatPage() {
     reviewActual,
     algoPoint,
     freeText,
+    basicQuestion,
   ])
 
   useEffect(() => {
@@ -1637,6 +1669,8 @@ export default function ChatPage() {
       }
       case 'free':
         return freeText.trim() ? freeText : ''
+      case 'basic':
+        return basicQuestion.trim() ? basicQuestion.trim() : ''
       default:
         return ''
     }
@@ -1655,6 +1689,7 @@ export default function ChatPage() {
     reviewActual,
     algoPoint,
     freeText,
+    basicQuestion,
   ])
 
   const currentLines = currentUserText ? currentUserText.split('\n').length : 0
@@ -1674,6 +1709,8 @@ export default function ChatPage() {
         return !!algoPoint.trim()
       case 'free':
         return !!freeText.trim()
+      case 'basic':
+        return !!basicQuestion.trim()
       default:
         return false
     }
@@ -1689,6 +1726,7 @@ export default function ChatPage() {
     reviewActual,
     algoPoint,
     freeText,
+    basicQuestion,
   ])
 
   const sendWithContext = async (userContent: string, qType: QuestionTypeForLog) => {
@@ -1761,6 +1799,10 @@ ${outputRule(lang)}`
       promptForLLM = String.raw`
 あなたは、プログラミング課題の「読み解き」と「作業工程の整理」を手伝う教員です。
 
+【文章構成ルール（最重要）】
+- 全ての回答は必ず「結論ファースト（結論→理由・説明）」の順序で記述してください。
+- 最初の1文目で、質問に対する直接的な答えや最も重要なポイント（結論）を端的に述べてください。
+
 【重要制約】
 - 具体的なコード例・疑似コード・数式の形のアルゴリズムは一切書かないでください。
 - \`\`\` やコードブロック、セミコロン付きの行など、「そのまま写せば動きそうなもの」は出してはいけません。
@@ -1782,12 +1824,15 @@ ${summary}
 【学生の状況・考え（コード全体を含む）】
 ${userContent}
 
-[出力形式]
-1) 課題のゴールの言い換え（1〜3文）
-2) 作業工程のステップ（番号付きで3〜7ステップ程度）
+[出力形式（長文禁止・可読性重視）]
+以下の順序と制限を守り、パッと見て読める簡潔な文章で出力すること。
+1) 結論：課題のゴールの言い換え（1〜2文で端的に）
+2) 作業工程のステップ（番号付きで3〜5ステップ程度に絞る。重要なキーワードは**太字**にする）
 3) 「今すぐできそうな最初の一歩」を1〜2文で提案
+※ 各項目の間には空行を入れて視覚的な余白を作ること。
+
 `.trim()
-    } else if (qType === 'free') {
+    } else if (qType === 'free' || qType === 'basic') {
       promptForLLM = String.raw`${FREE_TEXT_PROMPT}
 
 【相談モード】
@@ -1901,6 +1946,9 @@ ${outputRule(lang)}`
         break
       case 'free':
         setFreeText('')
+        break
+      case 'basic':
+        setBasicQuestion('')
         break
     }
     setQuestionMode('none')
@@ -2703,6 +2751,23 @@ ${filesForPrompt}
                   disabled={!problem || waitingFeedback || loading}
                 >
                   🟪 自由記述の相談
+                </button>
+
+                <button
+                  type="button"
+                  className={`px-2 py-1 rounded border ${
+                    questionMode === 'basic'
+                      ? 'bg-pink-200 border-pink-300'
+                      : 'bg-pink-50 border-pink-200 hover:bg-pink-100'
+                  } dark:border-gray-700 ${
+                    questionMode === 'basic'
+                      ? 'dark:bg-pink-900/25'
+                      : 'dark:bg-gray-900 dark:hover:bg-gray-800'
+                  }`}
+                  onClick={() => setQuestionMode('basic')}
+                  disabled={!problem || waitingFeedback || loading}
+                >
+                  🔰 初歩的な質問
                 </button>
               </div>
 

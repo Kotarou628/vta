@@ -221,7 +221,7 @@ export default function LoginPage() {
 
         {/* 新しく追加したクラス入力欄 */}
         <div>
-          <label className="block text-sm mb-1">クラス（A〜F、J、K）</label>
+          <label className="block text-sm mb-1">クラス（A〜F、J～K）</label>
           <input
             type="text"
             value={studentClass}
