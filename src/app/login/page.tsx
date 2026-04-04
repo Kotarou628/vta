@@ -22,7 +22,6 @@ const normalizeSeat = (raw: string) => {
       .trim()
       .toUpperCase();
 
-  // 例: "K5" / "k 5" / "K05" を "K05" に正規化
   const m = s.match(/^([A-Z])\s*0?(\d{1,2})$/);
   if (m) {
     const letter = m[1];
@@ -32,28 +31,42 @@ const normalizeSeat = (raw: string) => {
   return s;
 };
 
-/** A〜N + 01〜08 を許可（座席表に合わせる） */
+/** 全角→半角・前後空白除去・英字大文字化（クラス用） */
+const normalizeClass = (raw: string) => {
+  return (raw || '')
+    .replace(/[Ａ-Ｚａ-ｚ]/g, (ch) =>
+      String.fromCharCode(ch.charCodeAt(0) - 0xfee0)
+    )
+    .trim()
+    .toUpperCase();
+};
+
+/** A〜N + 01〜08 を許可 */
 const isValidSeat = (seat: string) => /^[A-O](0[1-7])$/.test(seat);
 
+/** クラスが A〜F, J, K のいずれかであるかチェック */
+const isValidClass = (studentClass: string) => /^[A-FJK]$/.test(studentClass);
 
-/** ローカル保存（chat ページの互換維持） */
-async function saveSeatLocal(seat: string, studentId: string) {
+/** ローカル保存 */
+async function saveSeatLocal(seat: string, studentId: string, studentClass: string) {
   try {
     localStorage.setItem('seatNumber', seat);
     localStorage.setItem('studentId', studentId);
+    localStorage.setItem('studentClass', studentClass);
 
     localStorage.setItem(
       'userSettings',
-      JSON.stringify({ seatNumber: seat, studentId })
+      JSON.stringify({ seatNumber: seat, studentId, studentClass })
     );
 
     sessionStorage.setItem('seat', seat);
     sessionStorage.setItem('studentId', studentId);
+    sessionStorage.setItem('studentClass', studentClass);
 
     await fetch('/api/session/seat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ seat, studentId }),
+      body: JSON.stringify({ seat, studentId, studentClass }),
     });
   } catch (e) {
     console.warn('[login] saveSeatLocal failed:', e);
@@ -61,23 +74,27 @@ async function saveSeatLocal(seat: string, studentId: string) {
 }
 
 /** students コレクションを upsert */
-async function upsertStudent(studentId: string, seat: string) {
+async function upsertStudent(studentId: string, seat: string, studentClass: string) {
   const ref = doc(db, 'students', studentId);
   const snap = await getDoc(ref);
 
   if (snap.exists()) {
+    // 既存データがある場合は createdAt は更新しない
     await setDoc(
       ref,
       {
         seatNumber: seat,
+        class: studentClass, 
         updatedAt: serverTimestamp(),
       },
       { merge: true }
     );
   } else {
+    // 新規作成時
     await setDoc(ref, {
       studentId,
       seatNumber: seat,
+      class: studentClass, 
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     });
@@ -87,6 +104,7 @@ async function upsertStudent(studentId: string, seat: string) {
 export default function LoginPage() {
   const router = useRouter();
   const [studentId, setStudentId] = useState('');
+  const [studentClass, setStudentClass] = useState(''); // クラス用State
   const [seat, setSeat] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -97,11 +115,18 @@ export default function LoginPage() {
     setError('');
 
     const sid = studentId.trim();
+    const classNormalized = normalizeClass(studentClass);
     const seatNormalized = normalizeSeat(seat);
 
     if (!sid) {
       setLoading(false);
       setError('学籍番号を入力してください。');
+      return;
+    }
+
+    if (!isValidClass(classNormalized)) {
+      setLoading(false);
+      setError('クラスは A〜F、J、K のいずれかを入力してください。');
       return;
     }
 
@@ -113,35 +138,48 @@ export default function LoginPage() {
     
     try {
       console.group('[LOGIN] handleLogin');
-      console.log('[LOGIN] input studentId =', sid);
-      console.log('[LOGIN] input seat      =', seat, '→', seatNormalized);
 
-      // 1) 匿名ログイン（既にログイン済みなら同じ user が返る）
+      // 1) 匿名ログイン
       const cred = await signInAnonymously(auth);
       const user = cred.user;
       console.log('[LOGIN] signed in anonymously. uid =', user.uid);
 
-      // 2) users/{uid} に学籍・座席を紐づけ（ChatPage の onAuthStateChanged 用）
+      // 2) users/{uid} に学籍・座席・クラスを紐づけ
       const userRef = doc(db, 'users', user.uid);
-      await setDoc(
-        userRef,
-        {
+      const userSnap = await getDoc(userRef);
+
+      if (userSnap.exists()) {
+        // 既に存在するユーザーの場合は createdAt は上書きせず、class等を追加・更新する
+        await setDoc(
+          userRef,
+          {
+            studentId: sid,
+            class: classNormalized,
+            seatNumber: seatNormalized,
+            role: 'student',
+            updatedAt: serverTimestamp(),
+          },
+          { merge: true }
+        );
+      } else {
+        // 全くの新規ユーザーの場合
+        await setDoc(userRef, {
           studentId: sid,
+          class: classNormalized,
           seatNumber: seatNormalized,
           role: 'student',
-          updatedAt: serverTimestamp(),
           createdAt: serverTimestamp(),
-        },
-        { merge: true }
-      );
+          updatedAt: serverTimestamp(),
+        });
+      }
       console.log('[LOGIN] users doc upserted');
 
-      // 3) students/{studentId} にも upsert（先生側ダッシュボード用）
-      await upsertStudent(sid, seatNormalized);
+      // 3) students/{studentId} にも upsert
+      await upsertStudent(sid, seatNormalized, classNormalized);
       console.log('[LOGIN] students doc upserted');
 
-      // 4) localStorage / sessionStorage に保存（既存チャット互換）
-      await saveSeatLocal(seatNormalized, sid);
+      // 4) localStorage / sessionStorage に保存
+      await saveSeatLocal(seatNormalized, sid, classNormalized);
       console.log('[LOGIN] localStorage/sessionStorage 保存完了');
 
       console.groupEnd();
@@ -150,15 +188,16 @@ export default function LoginPage() {
       router.push('/chat');
     } catch (err: any) {
       console.error('[LOGIN] error:', err);
-      if (err?.code === 'auth/operation-not-allowed') {
-        setError('Firebase 側で匿名ログインが無効になっています。コンソールの Authentication 設定を確認してください。');
-      } else {
-        setError('ログイン処理でエラーが発生しました。');
-      }
+      setError('ログイン処理でエラーが発生しました。');
     } finally {
       setLoading(false);
     }
   };
+
+  const classHelp = 
+    studentClass && !isValidClass(normalizeClass(studentClass))
+      ? 'A〜F、J、K のいずれかを入力してください（全角可）'
+      : '';
 
   const seatHelp =
     seat && !isValidSeat(normalizeSeat(seat))
@@ -180,18 +219,34 @@ export default function LoginPage() {
           />
         </div>
 
+        {/* 新しく追加したクラス入力欄 */}
         <div>
-          <label className="block text-sm mb-1">席番号（A01 など）</label>
+          <label className="block text-sm mb-1">クラス（A〜F、J、K）</label>
+          <input
+            type="text"
+            value={studentClass}
+            onChange={(e) => setStudentClass(e.target.value)}
+            onBlur={(e) => setStudentClass(normalizeClass(e.target.value))}
+            placeholder="A"
+            maxLength={1}
+            className="w-full border p-2 rounded uppercase"
+            required
+          />
+          {classHelp && <p className="text-xs text-red-500 mt-1">{classHelp}</p>}
+        </div>
+
+        <div>
+          <label className="block text-sm mb-1">席番号（A02 など）</label>
           <input
             type="text"
             value={seat}
             onChange={(e) => setSeat(e.target.value)}
             onBlur={(e) => setSeat(normalizeSeat(e.target.value))}
-            placeholder="A01"
-            className="w-full border p-2 rounded"
+            placeholder="A02"
+            className="w-full border p-2 rounded uppercase"
             required
           />
-          {seatHelp && <p className="text-xs text-gray-500">{seatHelp}</p>}
+          {seatHelp && <p className="text-xs text-red-500 mt-1">{seatHelp}</p>}
         </div>
 
         <button
