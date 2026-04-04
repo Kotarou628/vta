@@ -13,7 +13,6 @@ import {
 } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
 
-// ★ 画像2の分類に合わせて task を追加（値揺れは normalize で吸収）
 type QuestionType =
   | 'task'
   | 'writing'
@@ -21,6 +20,7 @@ type QuestionType =
   | 'review'
   | 'algo'
   | 'free'
+  | 'basic' // ★ 新規追加: 初歩的な質問
   | 'unknown'
 
 type ChatLog = {
@@ -38,6 +38,7 @@ type ChatLog = {
   userMode?: 'normal' | 'grading'
   answerMode?: 'normal' | 'grading'
   questionType?: QuestionType
+  classId?: string | null
 }
 
 type Submission = {
@@ -52,32 +53,26 @@ type Submission = {
   durationSec?: number
   files: { name: string; size: number; downloadURL?: string }[]
   inputMode?: 'files' | 'paste'
-  gradingResult?: string // ★ 生成AIの採点/評価出力
+  gradingResult?: string
+  classId?: string | null
 }
 
-// 座席情報（students コレクション）
 type StudentSeat = {
   id: string
   seatNumber: string
   currentProblemId?: string | null
   currentProblemTitle?: string | null
-  // 問題を選択した瞬間の時刻（タイマー開始）
   timerStartedAt?: Timestamp | null
-  // 将来 startedAt に移行しても動くように一応残しておく
   startedAt?: Timestamp | null
   taRequested?: boolean
   taRequestedAt?: Timestamp | null
-
-  // タイマー系（chat 画面と同じ設計）
   timerBaseSec?: number
   timerResumedAt?: Timestamp | null
   timerRunning?: boolean
-
-  // 本日分だけを座席ビューに出すための更新時刻
   updatedAt?: Timestamp | null
+  classId?: string | null // 学生が保持しているクラス情報
 }
 
-// ★ 画像2の文言に「完全一致」させた日本語ラベル
 const QUESTION_TYPE_LABEL: Record<QuestionType, string> = {
   task: '課題の読み解き・進め方',
   writing: '書き方の相談',
@@ -85,15 +80,14 @@ const QUESTION_TYPE_LABEL: Record<QuestionType, string> = {
   review: 'コードレビュー・バグの相談',
   algo: 'アルゴリズム・理論の相談',
   free: '自由記述の相談',
+  basic: '初歩的な質問', // ★ 新規追加
   unknown: '（種類未入力）',
 }
 
-// ★ 値揺れ吸収（Firestore側が task 以外で入っていても Teacher 側で統一表示する）
 const normalizeQuestionType = (raw: any): QuestionType => {
   const v = (raw ?? '').toString().trim().toLowerCase()
   if (!v) return 'unknown'
 
-  // 画像2: 「課題の読み解き・進め方」
   if (
     v === 'task' ||
     v === 'assignment' ||
@@ -111,7 +105,6 @@ const normalizeQuestionType = (raw: any): QuestionType => {
     return 'task'
   }
 
-  // 画像2: 「書き方の相談」
   if (
     v === 'writing' ||
     v === 'syntax' ||
@@ -123,12 +116,10 @@ const normalizeQuestionType = (raw: any): QuestionType => {
     return 'writing'
   }
 
-  // 画像2: 「エラー・例外の相談」
   if (v === 'error' || v === 'exception' || v === 'runtime' || v === 'bug') {
     return 'error'
   }
 
-  // 画像2: 「コードレビュー・バグの相談」
   if (
     v === 'review' ||
     v === 'code_review' ||
@@ -139,7 +130,6 @@ const normalizeQuestionType = (raw: any): QuestionType => {
     return 'review'
   }
 
-  // 画像2: 「アルゴリズム・理論の相談」
   if (
     v === 'algo' ||
     v === 'algorithm' ||
@@ -150,9 +140,18 @@ const normalizeQuestionType = (raw: any): QuestionType => {
     return 'algo'
   }
 
-  // 画像2: 「自由記述の相談」
   if (v === 'free' || v === 'other' || v === 'misc') {
     return 'free'
+  }
+
+  if (
+    v === 'basic' ||
+    v === 'beginner' ||
+    v === 'elementary' ||
+    v === 'introductory' ||
+    v === 'fundamental'
+  ) {
+    return 'basic'
   }
 
   return 'unknown'
@@ -163,7 +162,6 @@ const getStartOfTodayLocal = (): Date => {
   return new Date(now.getFullYear(), now.getMonth(), now.getDate())
 }
 
-// ★ YYYY-MM-DD の文字列 → その日の local Date（正午に寄せて DST 事故を避ける）
 const dateMsFromYMDLocalNoon = (ymd: string): number | null => {
   if (!ymd) return null
   const [y, m, d] = ymd.split('-').map((v) => Number(v))
@@ -171,7 +169,6 @@ const dateMsFromYMDLocalNoon = (ymd: string): number | null => {
   return new Date(y, m - 1, d, 12, 0, 0, 0).getTime()
 }
 
-// ★ 今日の YYYY-MM-DD（local）
 const getTodayYMDLocal = (): string => {
   const now = new Date()
   const y = now.getFullYear()
@@ -198,7 +195,6 @@ const secondsToMin = (sec?: number) => {
   return `${m}分${s}秒`
 }
 
-// 同じ日付かどうか（「選択日の履歴」判定にも使用）
 const isSameDay = (ts: Timestamp | null | undefined, nowMs: number) => {
   if (!ts) return false
   const d1 = ts.toDate()
@@ -210,7 +206,6 @@ const isSameDay = (ts: Timestamp | null | undefined, nowMs: number) => {
   )
 }
 
-// 経過時間（分）の fallback 計算
 const diffMinutesFromNow = (
   startedAt: Timestamp | null | undefined,
   nowMs: number
@@ -222,7 +217,6 @@ const diffMinutesFromNow = (
   return Math.floor(diff / 60000)
 }
 
-// 経過時間に応じた背景色（ダーク対応）
 const seatBgClassByMinutes = (minutes: number | null): string => {
   if (minutes == null) return 'bg-white dark:bg-gray-950'
   if (minutes < 20) return 'bg-white dark:bg-gray-950'
@@ -230,36 +224,30 @@ const seatBgClassByMinutes = (minutes: number | null): string => {
   return 'bg-red-200 dark:bg-red-900/30'
 }
 
-// 座席ブロック定義（画像のレイアウト準拠）
 const seatBlocks = [
-  // 左ブロック：A/B/C の 02〜07
   {
     id: 'left',
     cols: ['A', 'B', 'C'],
     rows: ['02', '03', '04', '05', '06', '07'],
   },
-  // 中央左：D/E/F の 01〜07
   {
     id: 'midLeft',
     cols: ['D', 'E', 'F'],
     rows: ['01', '02', '03', '04', '05', '06', '07'],
   },
-  // 中央：G/H/I の 01〜07
   {
     id: 'midCenter',
     cols: ['G', 'H', 'I'],
     rows: ['01', '02', '03', '04', '05', '06', '07'],
   },
-  // 中央右：J/K/L の 01〜07
   {
     id: 'midRight',
     cols: ['J', 'K', 'L'],
     rows: ['01', '02', '03', '04', '05', '06', '07'],
   },
-  // 一番右：M/L/N の 02〜07
   {
     id: 'farRight',
-    cols: ['M', 'N', 'O'], // 左から M, L, N の順で表示
+    cols: ['M', 'N', 'O'],
     rows: ['02', '03', '04', '05', '06', '07'],
   },
 ]
@@ -269,64 +257,71 @@ type UnifiedEntry =
   | ({ kind: 'grading'; createdAt: Timestamp | null } & Submission)
 
 export default function TeacherPage() {
-  // ===== 共通フィルタ状態 =====
   const [problemFilter, setProblemFilter] = useState<string>('all')
-  const [questionTypeFilter, setQuestionTypeFilter] =
-    useState<QuestionType | 'all'>('all')
-  const [resolvedFilter, setResolvedFilter] =
-    useState<'all' | 'resolved' | 'unresolved'>('all')
+  const [questionTypeFilter, setQuestionTypeFilter] = useState<QuestionType | 'all'>('all')
+  const [resolvedFilter, setResolvedFilter] = useState<'all' | 'resolved' | 'unresolved'>('all')
   const [limitCount, setLimitCount] = useState<number>(100)
 
-  // ★ 追加：ログ用の日付フィルタ（座席表には影響しない）
+  // ★ 追加: 座席ビュー固定用の担当クラス
+  const [assignedClass, setAssignedClass] = useState<string>('')
+  // ★ 追加: ログ一覧用のクラスフィルタ
+  const [logClassFilter, setLogClassFilter] = useState<string>('all')
+
   const [logDateYMD, setLogDateYMD] = useState<string>(getTodayYMDLocal())
-
-  // ★ デバッグ用: クリックされた座席ID
   const [debugSeatId, setDebugSeatId] = useState<string | null>(null)
-
-  // ★ 座席履歴表示用: クリックされた座席のログだけを絞り込むフィルタ
-  const [selectedSeatForHistory, setSelectedSeatForHistory] = useState<
-    string | null
-  >(null)
-
-  // ★ 追加：座席ビュー表示の回転（教卓側表示）
+  const [selectedSeatForHistory, setSelectedSeatForHistory] = useState<string | null>(null)
   const [seatRotated, setSeatRotated] = useState(false)
+  const [problemOptions, setProblemOptions] = useState<{ id: string; title: string }[]>([])
 
-  // 問題タイトル一覧（フィルタ用）
-  const [problemOptions, setProblemOptions] = useState<
-    { id: string; title: string }[]
-  >([])
-
-  // ===== チャットログ =====
   const [chatLogs, setChatLogs] = useState<ChatLog[]>([])
   const [chatLoading, setChatLoading] = useState(false)
-
-  // ===== 採点提出 =====
   const [submissions, setSubmissions] = useState<Submission[]>([])
   const [subLoading, setSubLoading] = useState(false)
-
-  // ===== 座席情報（students）=====
   const [students, setStudents] = useState<StudentSeat[]>([])
   const [studentsLoading, setStudentsLoading] = useState(false)
 
-  // 「今」の時刻（座席ビュー＆当日判定用）
   const [nowMs, setNowMs] = useState<number>(Date.now())
   useEffect(() => {
-    const id = setInterval(() => setNowMs(Date.now()), 60_000) // 1分ごとに更新
+    const id = setInterval(() => setNowMs(Date.now()), 60_000)
     return () => clearInterval(id)
   }, [])
 
-  // ★ 座席ビューのスケール制御用
   const seatOuterRef = useRef<HTMLDivElement | null>(null)
   const seatInnerRef = useRef<HTMLDivElement | null>(null)
   const [seatScale, setSeatScale] = useState(1)
 
-  // ★ 選択日（ログ一覧用）の ms
   const selectedDayMs = useMemo(() => {
     const ms = dateMsFromYMDLocalNoon(logDateYMD)
     return ms ?? nowMs
   }, [logDateYMD, nowMs])
 
-  // ---- 問題リスト取得（chatLogs から一度だけ。必要なら「再読み込み」で更新）----
+  // ★ 汎用的な 座席番号 → クラスID のマッピングを生成（ログ側の補完に利用）
+  const seatToClassMap = useMemo(() => {
+    const m = new Map<string, string>()
+    students.forEach((s) => {
+      const cId = s.classId || (s as any).class
+      if (s.seatNumber && cId) {
+        m.set(s.seatNumber.toUpperCase(), cId)
+      }
+    })
+    return m
+  }, [students])
+
+  // 取得したデータから存在するクラス一覧を動的に生成
+  const availableClasses = useMemo(() => {
+    const classes = new Set<string>()
+    students.forEach((st) => st.classId && classes.add(st.classId))
+    chatLogs.forEach((log) => {
+      const cId = log.classId || (log.seatNumber ? seatToClassMap.get(log.seatNumber.toUpperCase()) : null)
+      if (cId) classes.add(cId)
+    })
+    submissions.forEach((sub) => {
+      const cId = sub.classId || (sub.seatNumber ? seatToClassMap.get(sub.seatNumber.toUpperCase()) : null)
+      if (cId) classes.add(cId)
+    })
+    return Array.from(classes).sort()
+  }, [chatLogs, submissions, students, seatToClassMap])
+
   useEffect(() => {
     const fetchProblems = async () => {
       try {
@@ -358,7 +353,6 @@ export default function TeacherPage() {
     fetchProblems()
   }, [])
 
-  // ---- チャットログのリアルタイム購読 ----
   useEffect(() => {
     setChatLoading(true)
     const qBase = query(
@@ -387,8 +381,8 @@ export default function TeacherPage() {
             durationSec: d.durationSec,
             userMode: d.userMode,
             answerMode: d.answerMode,
-            // ★ ここで正規化（task などが来ても表示が空にならない）
             questionType: normalizeQuestionType(d.questionType),
+            classId: d.classId ?? null,
           })
         })
         setChatLogs(list)
@@ -403,7 +397,6 @@ export default function TeacherPage() {
     return () => unsub()
   }, [limitCount])
 
-  // ---- 採点提出のリアルタイム購読 ----
   useEffect(() => {
     setSubLoading(true)
     const qBase = query(
@@ -430,7 +423,8 @@ export default function TeacherPage() {
             durationSec: d.durationSec,
             files: Array.isArray(d.files) ? d.files : [],
             inputMode: d.inputMode,
-            gradingResult: d.gradingResult ?? '', // ★ 追加
+            gradingResult: d.gradingResult ?? '',
+            classId: d.classId ?? null,
           })
         })
         setSubmissions(list)
@@ -445,13 +439,12 @@ export default function TeacherPage() {
     return () => unsub()
   }, [limitCount])
 
-  // ---- students（座席情報）のリアルタイム購読 ----
   useEffect(() => {
     setStudentsLoading(true)
     const unsub = onSnapshot(
       collection(db, 'students'),
       (snap) => {
-        const todayStart = getStartOfTodayLocal() // 今日の 0:00
+        const todayStart = getStartOfTodayLocal()
 
         const list: StudentSeat[] = []
         snap.forEach((docSnap) => {
@@ -459,7 +452,6 @@ export default function TeacherPage() {
           if (!d.seatNumber) return
 
           const updatedAt: Timestamp | null = d.updatedAt ?? null
-          // updatedAt がない or 今日より前であれば「前回授業の残り」なので座席ビューから除外
           if (!updatedAt || updatedAt.toDate() < todayStart) {
             return
           }
@@ -473,11 +465,11 @@ export default function TeacherPage() {
             startedAt: d.startedAt ?? null,
             taRequested: !!d.taRequested,
             taRequestedAt: d.taRequestedAt ?? null,
-            timerBaseSec:
-              typeof d.timerBaseSec === 'number' ? d.timerBaseSec : 0,
+            timerBaseSec: typeof d.timerBaseSec === 'number' ? d.timerBaseSec : 0,
             timerResumedAt: d.timerResumedAt ?? null,
             timerRunning: !!d.timerRunning,
             updatedAt,
+            classId: d.classId ?? d.class ?? null, // フォールバック対応
           })
         })
         setStudents(list)
@@ -492,7 +484,6 @@ export default function TeacherPage() {
     return () => unsub()
   }, [])
 
-  // ★ 座席ビューのスケール計算（画面幅に合わせて縮小）
   useEffect(() => {
     const outer = seatOuterRef.current
     const inner = seatInnerRef.current
@@ -505,7 +496,6 @@ export default function TeacherPage() {
         setSeatScale(1)
         return
       }
-      // 一旦スケール1に戻して本来の幅を測る
       seatInnerRef.current.style.transform = 'scale(1)'
       const innerWidth = seatInnerRef.current.scrollWidth
       if (innerWidth <= 0) {
@@ -513,7 +503,7 @@ export default function TeacherPage() {
         return
       }
       const ratio = outerWidth / innerWidth
-      const nextScale = ratio < 1 ? ratio : 1 // 縮小のみ。拡大はしない
+      const nextScale = ratio < 1 ? ratio : 1
       setSeatScale(nextScale)
     }
 
@@ -527,24 +517,36 @@ export default function TeacherPage() {
     return () => {
       ro.disconnect()
     }
-  }, [students.length, problemFilter])
+  }, [students.length, problemFilter, assignedClass])
 
-  // フィルタ適用後のチャットログ（★選択日分のみ＋座席フィルタ）
+  // ★ 座席用：担当クラス (assignedClass) に属する学生のみマップに登録
+  const studentSeatMap = useMemo(() => {
+    const m = new Map<string, StudentSeat>()
+    if (!assignedClass) return m // クラス未選択時は空
+
+    students.forEach((s) => {
+      if (!s.seatNumber) return
+      const cId = s.classId || (s as any).class
+      if (cId !== assignedClass) return
+      m.set(s.seatNumber.toUpperCase(), s)
+    })
+    return m
+  }, [students, assignedClass])
+
+  // ★ ログ用のフィルタリング：logClassFilter で絞る
   const filteredChatLogs = useMemo(() => {
     return chatLogs.filter((log) => {
       if (!isSameDay(log.createdAt, selectedDayMs)) return false
-      if (problemFilter !== 'all' && log.problemId !== problemFilter)
-        return false
+      if (problemFilter !== 'all' && log.problemId !== problemFilter) return false
+      
+      const logClassId = log.classId || (log.seatNumber ? seatToClassMap.get(log.seatNumber.toUpperCase()) : null)
+      if (logClassFilter !== 'all' && logClassId !== logClassFilter) return false
 
-      // ★ 比較も正規化済み値で行う（表示とフィルタを一致させる）
       const qt = normalizeQuestionType(log.questionType)
-      if (questionTypeFilter !== 'all' && qt !== questionTypeFilter)
-        return false
-
+      if (questionTypeFilter !== 'all' && qt !== questionTypeFilter) return false
       if (resolvedFilter === 'resolved' && !log.resolved) return false
       if (resolvedFilter === 'unresolved' && log.resolved) return false
 
-      // ★ 座席フィルタ（履歴表示用）
       if (selectedSeatForHistory) {
         const seat = (log.seatNumber ?? '').toUpperCase()
         if (seat !== selectedSeatForHistory) return false
@@ -559,15 +561,18 @@ export default function TeacherPage() {
     resolvedFilter,
     selectedDayMs,
     selectedSeatForHistory,
+    logClassFilter,
+    seatToClassMap,
   ])
 
-  // フィルタ適用後の submissions（★選択日分のみ＋座席フィルタ）
   const filteredSubmissions = useMemo(() => {
     return submissions.filter((s) => {
       if (!isSameDay(s.submittedAt, selectedDayMs)) return false
       if (problemFilter !== 'all' && s.problemId !== problemFilter) return false
+      
+      const subClassId = s.classId || (s.seatNumber ? seatToClassMap.get(s.seatNumber.toUpperCase()) : null)
+      if (logClassFilter !== 'all' && subClassId !== logClassFilter) return false
 
-      // ★ 座席フィルタ（履歴表示用）
       if (selectedSeatForHistory) {
         const seat = (s.seatNumber ?? '').toUpperCase()
         if (seat !== selectedSeatForHistory) return false
@@ -575,9 +580,8 @@ export default function TeacherPage() {
 
       return true
     })
-  }, [submissions, problemFilter, selectedDayMs, selectedSeatForHistory])
+  }, [submissions, problemFilter, selectedDayMs, selectedSeatForHistory, logClassFilter, seatToClassMap])
 
-  // ★ チャット + 採点提出 を 1つの時系列ログに統合（★選択日）
   const unifiedEntries: UnifiedEntry[] = useMemo(() => {
     const chats: UnifiedEntry[] = filteredChatLogs.map((c) => ({
       kind: 'chat',
@@ -598,31 +602,17 @@ export default function TeacherPage() {
     return all
   }, [filteredChatLogs, filteredSubmissions])
 
-  // seatNumber → StudentSeat のマップ
-  const studentSeatMap = useMemo(() => {
-    const m = new Map<string, StudentSeat>()
-    students.forEach((s) => {
-      if (!s.seatNumber) return
-      m.set(s.seatNumber.toUpperCase(), s)
-    })
-    return m
-  }, [students])
-
-  // seatNumber → 「本日分の最新チャット（問題問わず）」のマップ
+  // 座席上の情報（ログ起因）：担当クラス (assignedClass) に属するもののみ取得
   const seatLatestAnyProblemMap = useMemo(() => {
-    const m = new Map<
-      string,
-      {
-        problemId: string
-        title: string
-        createdAt: Timestamp | null
-        durationSec?: number
-      }
-    >()
+    const m = new Map<string, { problemId: string; title: string; createdAt: Timestamp | null; durationSec?: number }>()
+    if (!assignedClass) return m
 
     chatLogs.forEach((log) => {
       if (!log.seatNumber || !log.problemId) return
-      if (!isSameDay(log.createdAt, nowMs)) return // ★座席表は本日固定
+      if (!isSameDay(log.createdAt, nowMs)) return
+      
+      const logClassId = log.classId || seatToClassMap.get(log.seatNumber.toUpperCase())
+      if (logClassId !== assignedClass) return
 
       const key = log.seatNumber.toUpperCase()
       if (!m.has(key)) {
@@ -630,30 +620,24 @@ export default function TeacherPage() {
           problemId: log.problemId,
           title: log.problemTitle ?? '',
           createdAt: log.createdAt ?? null,
-          durationSec:
-            typeof log.durationSec === 'number' ? log.durationSec : undefined,
+          durationSec: typeof log.durationSec === 'number' ? log.durationSec : undefined,
         })
       }
     })
 
     return m
-  }, [chatLogs, nowMs])
+  }, [chatLogs, nowMs, assignedClass, seatToClassMap])
 
-  // seatNumber + problemId → 「その問題の本日分の最新チャット」のマップ
   const seatProblemLatestMap = useMemo(() => {
-    const m = new Map<
-      string,
-      {
-        problemId: string
-        title: string
-        createdAt: Timestamp | null
-        durationSec?: number
-      }
-    >()
+    const m = new Map<string, { problemId: string; title: string; createdAt: Timestamp | null; durationSec?: number }>()
+    if (!assignedClass) return m
 
     chatLogs.forEach((log) => {
       if (!log.seatNumber || !log.problemId) return
-      if (!isSameDay(log.createdAt, nowMs)) return // ★座席表は本日固定
+      if (!isSameDay(log.createdAt, nowMs)) return
+
+      const logClassId = log.classId || seatToClassMap.get(log.seatNumber.toUpperCase())
+      if (logClassId !== assignedClass) return
 
       const seatId = log.seatNumber.toUpperCase()
       const key = `${seatId}__${log.problemId}`
@@ -662,34 +646,18 @@ export default function TeacherPage() {
           problemId: log.problemId,
           title: log.problemTitle ?? '',
           createdAt: log.createdAt ?? null,
-          durationSec:
-            typeof log.durationSec === 'number' ? log.durationSec : undefined,
+          durationSec: typeof log.durationSec === 'number' ? log.durationSec : undefined,
         })
       }
     })
 
     return m
-  }, [chatLogs, nowMs])
-
-  // ★ デバッグ用: 選択中座席の情報まとめ（UI 側はコメントアウト）
-  const debugSeatInfo = debugSeatId ? studentSeatMap.get(debugSeatId) : undefined
-  const debugLatestAny = debugSeatId
-    ? seatLatestAnyProblemMap.get(debugSeatId)
-    : undefined
-
-  const debugCurrentProblemId =
-    debugSeatInfo?.currentProblemId ?? debugLatestAny?.problemId ?? null
-
-  const debugLatestForCurrent =
-    debugSeatId && debugCurrentProblemId
-      ? seatProblemLatestMap.get(`${debugSeatId}__${debugCurrentProblemId}`)
-      : undefined
+  }, [chatLogs, nowMs, assignedClass, seatToClassMap])
 
   const anyLoading = chatLoading || subLoading
 
   return (
     <main className="h-screen flex flex-col bg-white text-gray-900 dark:bg-gray-950 dark:text-gray-100">
-      {/* ヘッダ */}
       <header className="border-b px-4 py-2 flex items-center justify-between bg-white dark:bg-gray-950 border-gray-200 dark:border-gray-800">
         <h1 className="font-bold text-lg text-gray-900 dark:text-gray-100">
           教員・TA向け 可視化画面
@@ -710,7 +678,6 @@ export default function TeacherPage() {
           <button
             className="text-xs border rounded px-2 py-1 hover:bg-gray-50 dark:hover:bg-gray-900 bg-white dark:bg-gray-950 border-gray-200 dark:border-gray-800"
             onClick={() => {
-              // 「再読み込み」は主に問題フィルタ用の候補を更新
               setNowMs(Date.now())
               ;(async () => {
                 try {
@@ -746,11 +713,50 @@ export default function TeacherPage() {
         </div>
       </header>
 
-      {/* コンテンツ */}
       <div className="flex flex-1 overflow-hidden">
-        {/* 左：フィルタ */}
         <aside className="w-64 border-r p-3 text-xs bg-gray-50 dark:bg-gray-900 space-y-3 overflow-y-auto border-gray-200 dark:border-gray-800">
-          {/* ★ 追加：日付フィルタ（ログ一覧のみ切替） */}
+          
+          {/* ★ 担当クラス設定 (座席ビュー固定) */}
+          <div className="p-2 -mx-2 bg-blue-50 dark:bg-blue-900/30 border-y border-blue-200 dark:border-blue-800 mb-2">
+            <div className="font-bold text-blue-900 dark:text-blue-200 mb-1 text-[11px]">
+              👨‍🏫 担当クラス (座席ビュー固定)
+            </div>
+            <select
+              className="w-full border rounded px-2 py-1 bg-white dark:bg-gray-950 border-blue-300 dark:border-blue-700 text-blue-900 dark:text-blue-100 font-semibold"
+              value={assignedClass}
+              onChange={(e) => setAssignedClass(e.target.value)}
+            >
+              <option value="" disabled>最初に選択してください</option>
+              {availableClasses.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
+            <div className="text-[9px] text-blue-700 dark:text-blue-300 mt-1">
+              ※選択したクラスの学生のみが座席に表示されます。
+            </div>
+          </div>
+
+          {/* ★ ログのクラスフィルタ */}
+          <div>
+            <div className="font-semibold mb-1 text-gray-700 dark:text-gray-200">
+              ログのクラス絞り込み
+            </div>
+            <select
+              className="w-full border rounded px-2 py-1 bg-white dark:bg-gray-950 border-gray-200 dark:border-gray-800 text-gray-900 dark:text-gray-100"
+              value={logClassFilter}
+              onChange={(e) => setLogClassFilter(e.target.value)}
+            >
+              <option value="all">すべてのクラス (他クラスも表示)</option>
+              {availableClasses.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
+          </div>
+
           <div>
             <div className="font-semibold mb-1 text-gray-700 dark:text-gray-200">
               日付フィルタ（ログ一覧）
@@ -804,7 +810,6 @@ export default function TeacherPage() {
             </select>
           </div>
 
-          {/* 既存フィルタは残す（チャットにのみ効く） */}
           <div>
             <div className="font-semibold mb-1 text-gray-700 dark:text-gray-200">
               質問タイプ
@@ -821,6 +826,7 @@ export default function TeacherPage() {
               <option value="review">コードレビュー・バグの相談</option>
               <option value="algo">アルゴリズム・理論の相談</option>
               <option value="free">自由記述の相談</option>
+              <option value="basic">初歩的な質問</option> {/* ★ 追加 */}
               <option value="unknown">（種類未入力）</option>
             </select>
           </div>
@@ -845,9 +851,7 @@ export default function TeacherPage() {
           </div>
         </aside>
 
-        {/* 右：メイン表示 */}
         <section className="flex-1 overflow-y-auto p-4 space-y-4 bg-white dark:bg-gray-950">
-          {/* 座席ビュー */}
           <section className="border rounded bg-white dark:bg-gray-950 p-3 text-xs space-y-2 border-gray-200 dark:border-gray-800">
             <div className="flex items-center justify-between mb-1">
               <h2 className="font-semibold text-sm text-gray-900 dark:text-gray-100">
@@ -855,10 +859,9 @@ export default function TeacherPage() {
               </h2>
 
               <div className="flex items-center gap-3">
-                {/* ★ 追加：表示切り替えボタン */}
                 <button
                   className="text-xs border rounded px-2 py-1 hover:bg-gray-50 dark:hover:bg-gray-900
-                             bg-white dark:bg-gray-950 border-gray-200 dark:border-gray-800"
+                              bg-white dark:bg-gray-950 border-gray-200 dark:border-gray-800"
                   onClick={() => setSeatRotated((v) => !v)}
                 >
                   {seatRotated ? '通常表示に戻す' : '教卓側表示（180°回転）'}
@@ -886,256 +889,271 @@ export default function TeacherPage() {
               </div>
             </div>
 
-            {/* ★ 座席ビュー全体をスケールさせるラッパー */}
-            <div
-              ref={seatOuterRef}
-              className="w-full flex justify-center overflow-hidden"
-            >
+            {/* ★ 担当クラスが未選択の場合はプレースホルダを表示 */}
+            {!assignedClass ? (
+              <div className="py-20 text-center text-gray-500 dark:text-gray-400">
+                <p className="text-sm font-semibold mb-2">担当クラスが選択されていません</p>
+                <p className="text-xs">左のメニューから「担当クラス」を選択すると、そのクラスの座席表が表示されます。</p>
+              </div>
+            ) : (
               <div
-                ref={seatInnerRef}
-                className="flex flex-col items-center gap-3 origin-top"
-                style={{ transform: `scale(${seatScale})` }}
+                ref={seatOuterRef}
+                className="w-full flex justify-center overflow-hidden"
               >
-                {/* ★ 追加：回転ラッパー（座席配置を180°回転） */}
                 <div
-                  className="transform"
-                  style={{
-                    transform: seatRotated ? 'rotate(180deg)' : 'rotate(0deg)',
-                    transformOrigin: 'center',
-                  }}
+                  ref={seatInnerRef}
+                  className="flex flex-col items-center gap-3 origin-top"
+                  style={{ transform: `scale(${seatScale})` }}
                 >
                   <div
-                    className={`mt-1 mb-1 px-6 py-1 border text-[11px] text-center bg-white dark:bg-gray-950 border-gray-200 dark:border-gray-800 text-gray-900 dark:text-gray-100 ${
-                      seatRotated ? 'transform rotate-180' : ''
-                    }`}
+                    className="transform"
+                    style={{
+                      transform: seatRotated ? 'rotate(180deg)' : 'rotate(0deg)',
+                      transformOrigin: 'center',
+                    }}
                   >
-                    教卓
-                  </div>
+                    <div
+                      className={`mt-1 mb-1 px-6 py-1 border text-[11px] text-center bg-white dark:bg-gray-950 border-gray-200 dark:border-gray-800 text-gray-900 dark:text-gray-100 ${
+                        seatRotated ? 'transform rotate-180' : ''
+                      }`}
+                    >
+                      教卓
+                    </div>
 
-                  <div className="flex flex-wrap gap-6 justify-center">
-                    {seatBlocks.map((block) => {
-                      const offsetClass =
-                        block.id === 'left' || block.id === 'farRight'
-                          ? 'mt-14'
-                          : ''
+                    <div className="flex flex-wrap gap-6 justify-center">
+                      {seatBlocks.map((block) => {
+                        const offsetClass =
+                          block.id === 'left' || block.id === 'farRight'
+                            ? 'mt-14'
+                            : ''
 
-                      return (
-                        <div
-                          key={block.id}
-                          className={`grid gap-px border bg-gray-200 dark:bg-gray-800 ${offsetClass}`}
-                          style={{
-                            gridTemplateColumns: `repeat(${block.cols.length}, 4.5rem)`,
-                          }}
-                        >
-                          {block.rows.map((row) =>
-                            block.cols.map((col) => {
-                              const seatId = `${col}${row}`
+                        return (
+                          <div
+                            key={block.id}
+                            className={`grid gap-px border bg-gray-200 dark:bg-gray-800 ${offsetClass}`}
+                            style={{
+                              gridTemplateColumns: `repeat(${block.cols.length}, 4.5rem)`,
+                            }}
+                          >
+                            {block.rows.map((row) =>
+                              block.cols.map((col) => {
+                                const seatId = `${col}${row}`
 
-                              const seatInfo = studentSeatMap.get(seatId)
-                              const latestAny =
-                                seatLatestAnyProblemMap.get(seatId)
+                                // 担当クラスに該当する学生・ログのみ取得済みのマップから参照
+                                const seatInfo = studentSeatMap.get(seatId)
+                                const latestAny = seatLatestAnyProblemMap.get(seatId)
 
-                              const currentProblemId =
-                                seatInfo?.currentProblemId ??
-                                latestAny?.problemId ??
-                                null
+                                // ★ その座席に担当クラスの学生情報やログが何も無い場合は「空席」として表示
+                                if (!seatInfo && !latestAny) {
+                                  return (
+                                    <div
+                                      key={seatId}
+                                      className="flex flex-col items-center justify-center h-14 border bg-gray-50 dark:bg-gray-900 opacity-30 border-gray-200 dark:border-gray-800"
+                                    >
+                                      <div className={`text-[11px] text-gray-400 ${seatRotated ? 'transform rotate-180' : ''}`}>
+                                        {seatId}
+                                      </div>
+                                    </div>
+                                  )
+                                }
 
-                              const latestForCurrent =
-                                currentProblemId != null
-                                  ? seatProblemLatestMap.get(
-                                      `${seatId}__${currentProblemId}`
+                                const currentProblemId =
+                                  seatInfo?.currentProblemId ??
+                                  latestAny?.problemId ??
+                                  null
+
+                                const latestForCurrent =
+                                  currentProblemId != null
+                                    ? seatProblemLatestMap.get(
+                                        `${seatId}__${currentProblemId}`
+                                      )
+                                    : undefined
+
+                                const problemId = currentProblemId
+                                const title =
+                                  seatInfo?.currentProblemTitle ??
+                                  latestForCurrent?.title ??
+                                  latestAny?.title ??
+                                  ''
+
+                                let minutesToday: number | null = null
+
+                                const startedTs =
+                                  seatInfo?.timerStartedAt ??
+                                  seatInfo?.startedAt ??
+                                  seatInfo?.updatedAt ??
+                                  null
+
+                                let elapsedSecByTimer: number | null = null
+                                const baseSec =
+                                  typeof seatInfo?.timerBaseSec === 'number'
+                                    ? seatInfo.timerBaseSec
+                                    : 0
+
+                                if (baseSec > 0 || seatInfo?.timerRunning) {
+                                  let sec = baseSec
+                                  if (
+                                    seatInfo?.timerRunning &&
+                                    seatInfo.timerResumedAt
+                                  ) {
+                                    const resumedMs =
+                                      seatInfo.timerResumedAt.toDate().getTime()
+                                    const diffSec = Math.max(
+                                      0,
+                                      Math.floor((nowMs - resumedMs) / 1000)
                                     )
-                                  : undefined
-
-                              const problemId = currentProblemId
-                              const title =
-                                seatInfo?.currentProblemTitle ??
-                                latestForCurrent?.title ??
-                                latestAny?.title ??
-                                ''
-
-                              let minutesToday: number | null = null
-
-                              const startedTs =
-                                seatInfo?.timerStartedAt ??
-                                seatInfo?.startedAt ??
-                                seatInfo?.updatedAt ??
-                                null
-
-                              let elapsedSecByTimer: number | null = null
-                              const baseSec =
-                                typeof seatInfo?.timerBaseSec === 'number'
-                                  ? seatInfo.timerBaseSec
-                                  : 0
-
-                              if (baseSec > 0 || seatInfo?.timerRunning) {
-                                let sec = baseSec
-                                if (
-                                  seatInfo?.timerRunning &&
-                                  seatInfo.timerResumedAt
-                                ) {
-                                  const resumedMs =
-                                    seatInfo.timerResumedAt.toDate().getTime()
-                                  const diffSec = Math.max(
-                                    0,
-                                    Math.floor((nowMs - resumedMs) / 1000)
-                                  )
-                                  sec += diffSec
+                                    sec += diffSec
+                                  }
+                                  elapsedSecByTimer = sec
                                 }
-                                elapsedSecByTimer = sec
-                              }
 
-                              const isTodayByTimer =
-                                (startedTs && isSameDay(startedTs, nowMs)) ||
-                                (seatInfo?.timerResumedAt &&
-                                  isSameDay(seatInfo.timerResumedAt, nowMs))
+                                const isTodayByTimer =
+                                  (startedTs && isSameDay(startedTs, nowMs)) ||
+                                  (seatInfo?.timerResumedAt &&
+                                    isSameDay(seatInfo.timerResumedAt, nowMs))
 
-                              if (elapsedSecByTimer != null && isTodayByTimer) {
-                                minutesToday = Math.floor(elapsedSecByTimer / 60)
-                              }
-
-                              if (minutesToday == null) {
-                                if (
-                                  latestForCurrent?.createdAt &&
-                                  isSameDay(latestForCurrent.createdAt, nowMs) &&
-                                  typeof latestForCurrent.durationSec === 'number'
-                                ) {
-                                  minutesToday = Math.floor(
-                                    latestForCurrent.durationSec / 60
-                                  )
+                                if (elapsedSecByTimer != null && isTodayByTimer) {
+                                  minutesToday = Math.floor(elapsedSecByTimer / 60)
                                 }
-                              }
 
-                              if (minutesToday == null && startedTs) {
-                                if (isSameDay(startedTs, nowMs)) {
-                                  minutesToday = diffMinutesFromNow(
-                                    startedTs,
-                                    nowMs
-                                  )
+                                if (minutesToday == null) {
+                                  if (
+                                    latestForCurrent?.createdAt &&
+                                    isSameDay(latestForCurrent.createdAt, nowMs) &&
+                                    typeof latestForCurrent.durationSec === 'number'
+                                  ) {
+                                    minutesToday = Math.floor(
+                                      latestForCurrent.durationSec / 60
+                                    )
+                                  }
                                 }
-                              }
 
-                              const matchesFilter =
-                                problemFilter === 'all' ||
-                                (problemId && problemId === problemFilter)
+                                if (minutesToday == null && startedTs) {
+                                  if (isSameDay(startedTs, nowMs)) {
+                                    minutesToday = diffMinutesFromNow(
+                                      startedTs,
+                                      nowMs
+                                    )
+                                  }
+                                }
 
-                              let bgClass =
-                                matchesFilter && minutesToday != null
-                                  ? seatBgClassByMinutes(minutesToday)
-                                  : 'bg-white dark:bg-gray-950'
+                                const matchesFilter =
+                                  problemFilter === 'all' ||
+                                  (problemId && problemId === problemFilter)
 
-                              let mainLine = title
-                              let subLine =
-                                matchesFilter && minutesToday != null
-                                  ? `${minutesToday}分経過`
+                                let bgClass =
+                                  matchesFilter && minutesToday != null
+                                    ? seatBgClassByMinutes(minutesToday)
+                                    : 'bg-white dark:bg-gray-950'
+
+                                let mainLine = title
+                                let subLine =
+                                  matchesFilter && minutesToday != null
+                                    ? `${minutesToday}分経過`
+                                    : ''
+
+                                let taLine = seatInfo?.taRequested
+                                  ? 'TA呼び出し中'
                                   : ''
 
-                              let taLine = seatInfo?.taRequested
-                                ? 'TA呼び出し中'
-                                : ''
+                                let isTodaySeat = false
+                                if (isTodayByTimer) {
+                                  isTodaySeat = true
+                                } else if (
+                                  latestForCurrent?.createdAt &&
+                                  isSameDay(latestForCurrent.createdAt, nowMs)
+                                ) {
+                                  isTodaySeat = true
+                                } else if (
+                                  latestAny?.createdAt &&
+                                  isSameDay(latestAny?.createdAt, nowMs)
+                                ) {
+                                  isTodaySeat = true
+                                } else if (
+                                  seatInfo?.updatedAt &&
+                                  isSameDay(seatInfo.updatedAt, nowMs)
+                                ) {
+                                  isTodaySeat = true
+                                }
 
-                              let isTodaySeat = false
-                              if (isTodayByTimer) {
-                                isTodaySeat = true
-                              } else if (
-                                latestForCurrent?.createdAt &&
-                                isSameDay(latestForCurrent.createdAt, nowMs)
-                              ) {
-                                isTodaySeat = true
-                              } else if (
-                                latestAny?.createdAt &&
-                                isSameDay(latestAny?.createdAt, nowMs)
-                              ) {
-                                isTodaySeat = true
-                              } else if (
-                                seatInfo?.updatedAt &&
-                                isSameDay(seatInfo.updatedAt, nowMs)
-                              ) {
-                                isTodaySeat = true
-                              }
+                                if (!isTodaySeat) {
+                                  mainLine = ''
+                                  subLine = ''
+                                  taLine = ''
+                                  minutesToday = null
+                                  bgClass = 'bg-white dark:bg-gray-950'
+                                }
 
-                              if (!isTodaySeat) {
-                                mainLine = ''
-                                subLine = ''
-                                taLine = ''
-                                minutesToday = null
-                                bgClass = 'bg-white dark:bg-gray-950'
-                              }
+                                if (problemFilter !== 'all' && !matchesFilter) {
+                                  mainLine = ''
+                                  subLine = ''
+                                  taLine = ''
+                                }
 
-                              if (problemFilter !== 'all' && !matchesFilter) {
-                                mainLine = ''
-                                subLine = ''
-                                taLine = ''
-                              }
+                                if (seatInfo?.taRequested && isTodaySeat) {
+                                  bgClass =
+                                    'bg-rose-200 dark:bg-rose-900/35 border-rose-500 dark:border-rose-500'
+                                }
 
-                              if (seatInfo?.taRequested && isTodaySeat) {
-                                bgClass =
-                                  'bg-rose-200 dark:bg-rose-900/35 border-rose-500 dark:border-rose-500'
-                              }
+                                const isSelectedSeat =
+                                  selectedSeatForHistory === seatId
 
-                              const isSelectedSeat =
-                                selectedSeatForHistory === seatId
-
-                              return (
-                                <div
-                                  key={seatId}
-                                  className={`flex flex-col items-center justify-center h-14 border ${bgClass} border-gray-200 dark:border-gray-800 ${
-                                    isSelectedSeat
-                                      ? 'ring-2 ring-blue-400 ring-offset-1 dark:ring-offset-gray-950'
-                                      : ''
-                                  }`}
-                                  onClick={() => {
-                                    // ★ 同じ座席をもう一度クリック → フィルタ解除
-                                    if (selectedSeatForHistory === seatId) {
-                                      setSelectedSeatForHistory(null)
-                                    } else {
-                                      // ★ クリックした座席の履歴だけを下のログ一覧に表示
-                                      setSelectedSeatForHistory(seatId)
-                                      // ★ ログ一覧の日付は「今日」に合わせる（座席ビューは本日固定のため）
-                                      setLogDateYMD(getTodayYMDLocal())
-                                    }
-                                    // ★ デバッグ用 ID は残しておくが、UI 側はコメントアウト済み
-                                    setDebugSeatId(seatId)
-                                  }}
-                                >
-                                  {/* ★ 追加：回転時だけ、セル内の文字を逆回転して読みやすくする */}
+                                return (
                                   <div
-                                    className={`w-full flex flex-col items-center ${
-                                      seatRotated ? 'transform rotate-180' : ''
-                                    }`}
+                                    key={seatId}
+                                    className={`flex flex-col items-center justify-center h-14 border ${bgClass} border-gray-200 dark:border-gray-800 ${
+                                      isSelectedSeat
+                                        ? 'ring-2 ring-blue-400 ring-offset-1 dark:ring-offset-gray-950'
+                                        : ''
+                                    } cursor-pointer hover:ring-1 hover:ring-blue-300`}
+                                    onClick={() => {
+                                      if (selectedSeatForHistory === seatId) {
+                                        setSelectedSeatForHistory(null)
+                                      } else {
+                                        setSelectedSeatForHistory(seatId)
+                                        setLogDateYMD(getTodayYMDLocal())
+                                      }
+                                      setDebugSeatId(seatId)
+                                    }}
                                   >
-                                    <div className="text-[11px] font-semibold flex items-center gap-1 text-gray-900 dark:text-gray-100">
-                                      <span>{seatId}</span>
-                                      {seatInfo?.taRequested && isTodaySeat && (
-                                        <span>👋</span>
+                                    <div
+                                      className={`w-full flex flex-col items-center ${
+                                        seatRotated ? 'transform rotate-180' : ''
+                                      }`}
+                                    >
+                                      <div className="text-[11px] font-semibold flex items-center gap-1 text-gray-900 dark:text-gray-100">
+                                        <span>{seatId}</span>
+                                        {seatInfo?.taRequested && isTodaySeat && (
+                                          <span>👋</span>
+                                        )}
+                                      </div>
+
+                                      <div className="text-[10px] text-center px-1 truncate w-full text-gray-900 dark:text-gray-100">
+                                        {mainLine || ''}
+                                      </div>
+
+                                      <div className="text-[10px] text-center text-gray-700 dark:text-gray-300">
+                                        {subLine}
+                                      </div>
+
+                                      {taLine && (
+                                        <div className="text-[10px] text-center text-rose-700 dark:text-rose-300 font-semibold">
+                                          {taLine}
+                                        </div>
                                       )}
                                     </div>
-
-                                    <div className="text-[10px] text-center px-1 truncate w-full text-gray-900 dark:text-gray-100">
-                                      {mainLine || ''}
-                                    </div>
-
-                                    <div className="text-[10px] text-center text-gray-700 dark:text-gray-300">
-                                      {subLine}
-                                    </div>
-
-                                    {taLine && (
-                                      <div className="text-[10px] text-center text-rose-700 dark:text-rose-300 font-semibold">
-                                        {taLine}
-                                      </div>
-                                    )}
                                   </div>
-                                </div>
-                              )
-                            })
-                          )}
-                        </div>
-                      )
-                    })}
+                                )
+                              })
+                            )}
+                          </div>
+                        )
+                      })}
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
+            )}
 
             <div className="text-[10px] text-gray-500 dark:text-gray-400 mt-1">
               ・本日の履歴のみを対象としています（前日以前のデータは座席ビューには表示されません）。<br />
@@ -1144,45 +1162,8 @@ export default function TeacherPage() {
               ・チャット／採点／座席情報は Firestore の変更をリアルタイムで反映します。<br />
               ・座席をクリックすると、その座席のログだけが下の「ログ一覧」に表示されます（もう一度クリックすると全体表示に戻ります）。
             </div>
-
-            {/* ★ デバッグパネル（一般利用では非表示。必要なときだけコメントアウトを外す） */}
-            {/*
-            {debugSeatId && (
-              <div className="mt-2 border-t pt-2 text-[10px] text-gray-700">
-                <div className="flex items-center justify-between mb-1">
-                  <div className="font-semibold">
-                    デバッグ情報（座席 {debugSeatId} をクリック中）
-                  </div>
-                  <button
-                    className="border rounded px-2 py-0.5 text-[10px] bg-white hover:bg-gray-50"
-                    onClick={() => setDebugSeatId(null)}
-                  >
-                    閉じる
-                  </button>
-                </div>
-
-                <pre className="bg-gray-50 rounded p-2 overflow-auto max-h-48">
-{JSON.stringify(
-  {
-    now: new Date(nowMs).toISOString(),
-    seatInfo: debugSeatInfo ?? null,
-    latestAnyChat: debugLatestAny ?? null,
-    latestForCurrent: debugLatestForCurrent ?? null,
-  },
-  null,
-  2
-)}
-                </pre>
-                <div className="mt-1 text-[10px] text-gray-500">
-                  ※座席をクリックすると、その座席に対応する students ドキュメントと、<br />
-                  本日分の最新のチャット情報が JSON として表示されます。
-                </div>
-              </div>
-            )}
-            */}
           </section>
 
-          {/* ★ 統合ログ一覧（選択日分） */}
           <section className="space-y-2">
             <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2 mb-1">
               <h2 className="font-semibold text-sm text-gray-900 dark:text-gray-100">
@@ -1197,7 +1178,6 @@ export default function TeacherPage() {
               </div>
             </div>
 
-            {/* ★ 座席フィルタ中の目立つバー＋解除ボタン */}
             {selectedSeatForHistory && (
               <div className="mb-2 flex items-center justify-between border rounded bg-blue-50 dark:bg-blue-950/40 px-3 py-1 text-[11px] text-blue-900 dark:text-blue-200 border-blue-200 dark:border-blue-900">
                 <span>
@@ -1226,13 +1206,16 @@ export default function TeacherPage() {
                   const log = e
                   const qt = normalizeQuestionType(log.questionType)
                   const qtLabel = QUESTION_TYPE_LABEL[qt] ?? QUESTION_TYPE_LABEL.unknown
+                  
+                  // 学生情報（座席）からクラス情報を補完
+                  const cId = log.classId || (log.seatNumber ? seatToClassMap.get(log.seatNumber.toUpperCase()) : null)
 
                   return (
                     <details
                       key={`chat-${log.id}`}
                       className="border rounded bg-white dark:bg-gray-950 text-xs border-gray-200 dark:border-gray-800"
                     >
-                      <summary className="px-3 py-2 cursor-pointer flex items-center justify-between gap-3">
+                      <summary className="px-3 py-2 cursor-pointer flex items-center justify-between gap-3 hover:bg-gray-50 dark:hover:bg-gray-900">
                         <div className="flex flex-col gap-1 min-w-0">
                           <div className="flex flex-wrap gap-2 items-center">
                             <span className="font-semibold truncate max-w-[18rem] text-gray-900 dark:text-gray-100">
@@ -1246,7 +1229,11 @@ export default function TeacherPage() {
                                 座席: {log.seatNumber}
                               </span>
                             )}
-                            {/* ★ 種類は必ず表示（task などでも空にならない） */}
+                            {cId && (
+                              <span className="px-1.5 py-0.5 rounded border bg-purple-50 dark:bg-purple-950/40 border-purple-200 dark:border-purple-900 text-gray-900 dark:text-gray-100">
+                                クラス: {cId}
+                              </span>
+                            )}
                             <span className="px-1.5 py-0.5 rounded border bg-blue-50 dark:bg-blue-950/40 border-blue-200 dark:border-blue-900 text-gray-900 dark:text-gray-100">
                               種類: {qtLabel}
                             </span>
@@ -1295,14 +1282,15 @@ export default function TeacherPage() {
                   )
                 }
 
-                // grading
                 const s = e
+                const cId = s.classId || (s.seatNumber ? seatToClassMap.get(s.seatNumber.toUpperCase()) : null)
+
                 return (
                   <details
                     key={`grading-${s.id}`}
                     className="border rounded bg-white dark:bg-gray-950 text-xs border-gray-200 dark:border-gray-800"
                   >
-                    <summary className="px-3 py-2 cursor-pointer flex items-center justify-between gap-3">
+                    <summary className="px-3 py-2 cursor-pointer flex items-center justify-between gap-3 hover:bg-gray-50 dark:hover:bg-gray-900">
                       <div className="flex flex-col gap-1 min-w-0">
                         <div className="flex flex-wrap items-center gap-2">
                           <span className="font-semibold truncate max-w-[18rem] text-gray-900 dark:text-gray-100">
@@ -1316,7 +1304,11 @@ export default function TeacherPage() {
                               座席: {s.seatNumber}
                             </span>
                           )}
-                          {/* 種別・入力方法のタグは表示しない（内部的には保持） */}
+                          {cId && (
+                            <span className="px-1.5 py-0.5 rounded border bg-purple-50 dark:bg-purple-950/40 border-purple-200 dark:border-purple-900 text-gray-900 dark:text-gray-100">
+                              クラス: {cId}
+                            </span>
+                          )}
                         </div>
                         <div className="text-[11px] text-gray-500 dark:text-gray-400 flex flex-wrap gap-2">
                           <span>{formatDateTime(s.submittedAt)}</span>
@@ -1335,7 +1327,6 @@ export default function TeacherPage() {
                     </summary>
 
                     <div className="border-t px-3 py-2 space-y-2 border-gray-200 dark:border-gray-800">
-                      {/* ★ 生成AIの出力内容 */}
                       {s.gradingResult ? (
                         <div className="space-y-1">
                           <div className="font-semibold text-gray-700 dark:text-gray-200">
@@ -1351,7 +1342,6 @@ export default function TeacherPage() {
                         </div>
                       )}
 
-                      {/* ファイル一覧 */}
                       {s.files && s.files.length > 0 ? (
                         <div className="space-y-1">
                           <div className="font-semibold text-gray-700 dark:text-gray-200">

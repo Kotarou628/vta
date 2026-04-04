@@ -31,21 +31,14 @@ const normalizeSeat = (raw: string) => {
   return s;
 };
 
-/** 全角→半角・前後空白除去・英字大文字化（クラス用） */
-const normalizeClass = (raw: string) => {
-  return (raw || '')
-    .replace(/[Ａ-Ｚａ-ｚ]/g, (ch) =>
-      String.fromCharCode(ch.charCodeAt(0) - 0xfee0)
-    )
-    .trim()
-    .toUpperCase();
-};
-
 /** A〜N + 01〜08 を許可 */
 const isValidSeat = (seat: string) => /^[A-O](0[1-7])$/.test(seat);
 
-/** クラスが A〜F, J, K のいずれかであるかチェック */
-const isValidClass = (studentClass: string) => /^[A-FJK]$/.test(studentClass);
+/** クラスの選択肢リスト（JKLクラスをJKL1クラスとJKL2クラスに変更） */
+const ALLOWED_CLASSES = ['ABクラス', 'CDクラス', 'EFクラス', 'JKL1クラス', 'JKL2クラス'];
+
+/** 選択されたクラスが正しいかチェック */
+const isValidClass = (studentClass: string) => ALLOWED_CLASSES.includes(studentClass);
 
 /** ローカル保存 */
 async function saveSeatLocal(seat: string, studentId: string, studentClass: string) {
@@ -104,7 +97,7 @@ async function upsertStudent(studentId: string, seat: string, studentClass: stri
 export default function LoginPage() {
   const router = useRouter();
   const [studentId, setStudentId] = useState('');
-  const [studentClass, setStudentClass] = useState(''); // クラス用State
+  const [studentClass, setStudentClass] = useState(''); // クラス用State（初期値は空）
   const [seat, setSeat] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -115,7 +108,6 @@ export default function LoginPage() {
     setError('');
 
     const sid = studentId.trim();
-    const classNormalized = normalizeClass(studentClass);
     const seatNormalized = normalizeSeat(seat);
 
     if (!sid) {
@@ -124,9 +116,9 @@ export default function LoginPage() {
       return;
     }
 
-    if (!isValidClass(classNormalized)) {
+    if (!isValidClass(studentClass)) {
       setLoading(false);
-      setError('クラスは A〜F、J、K のいずれかを入力してください。');
+      setError('クラスを選択してください。');
       return;
     }
 
@@ -154,7 +146,7 @@ export default function LoginPage() {
           userRef,
           {
             studentId: sid,
-            class: classNormalized,
+            class: studentClass,
             seatNumber: seatNormalized,
             role: 'student',
             updatedAt: serverTimestamp(),
@@ -165,7 +157,7 @@ export default function LoginPage() {
         // 全くの新規ユーザーの場合
         await setDoc(userRef, {
           studentId: sid,
-          class: classNormalized,
+          class: studentClass,
           seatNumber: seatNormalized,
           role: 'student',
           createdAt: serverTimestamp(),
@@ -175,11 +167,11 @@ export default function LoginPage() {
       console.log('[LOGIN] users doc upserted');
 
       // 3) students/{studentId} にも upsert
-      await upsertStudent(sid, seatNormalized, classNormalized);
+      await upsertStudent(sid, seatNormalized, studentClass);
       console.log('[LOGIN] students doc upserted');
 
       // 4) localStorage / sessionStorage に保存
-      await saveSeatLocal(seatNormalized, sid, classNormalized);
+      await saveSeatLocal(seatNormalized, sid, studentClass);
       console.log('[LOGIN] localStorage/sessionStorage 保存完了');
 
       console.groupEnd();
@@ -193,11 +185,6 @@ export default function LoginPage() {
       setLoading(false);
     }
   };
-
-  const classHelp = 
-    studentClass && !isValidClass(normalizeClass(studentClass))
-      ? 'A〜F、J、K のいずれかを入力してください（全角可）'
-      : '';
 
   const seatHelp =
     seat && !isValidSeat(normalizeSeat(seat))
@@ -219,20 +206,24 @@ export default function LoginPage() {
           />
         </div>
 
-        {/* 新しく追加したクラス入力欄 */}
+        {/* 選択式（プルダウン）に変更したクラス入力欄 */}
         <div>
-          <label className="block text-sm mb-1">クラス（A〜F、J～K）</label>
-          <input
-            type="text"
+          <label className="block text-sm mb-1">クラス</label>
+          <select
             value={studentClass}
             onChange={(e) => setStudentClass(e.target.value)}
-            onBlur={(e) => setStudentClass(normalizeClass(e.target.value))}
-            placeholder="A"
-            maxLength={1}
-            className="w-full border p-2 rounded uppercase"
+            className="w-full border p-2 rounded bg-white"
             required
-          />
-          {classHelp && <p className="text-xs text-red-500 mt-1">{classHelp}</p>}
+          >
+            <option value="" disabled>
+              選択してください
+            </option>
+            {ALLOWED_CLASSES.map((cls) => (
+              <option key={cls} value={cls}>
+                {cls}
+              </option>
+            ))}
+          </select>
         </div>
 
         <div>
