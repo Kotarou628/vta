@@ -272,7 +272,7 @@ export default function TeacherPage() {
   const [limitCount, setLimitCount] = useState<number>(100)
 
   const [assignedClass, setAssignedClass] = useState<string>('')
-  const [logClassFilter, setLogClassFilter] = useState<string>('all')
+  const [logClassFilters, setLogClassFilters] = useState<string[]>([])
 
   const [logDateYMD, setLogDateYMD] = useState<string>(getTodayYMDLocal())
   const [debugSeatId, setDebugSeatId] = useState<string | null>(null)
@@ -510,6 +510,14 @@ export default function TeacherPage() {
     }
   }, [students.length, problemFilter, assignedClass])
 
+  useEffect(() => {
+    if (assignedClass) {
+      setLogClassFilters([assignedClass])
+    } else {
+      setLogClassFilters([])
+    }
+  }, [assignedClass])
+
   const studentSeatMap = useMemo(() => {
     const m = new Map<string, StudentSeat>()
     if (!assignedClass) return m
@@ -525,51 +533,56 @@ export default function TeacherPage() {
 
   const filteredChatLogs = useMemo(() => {
     return chatLogs.filter((log) => {
+      // 担当クラスが未選択なら何も出さない
+      if (!assignedClass) return false
+      // フィルター配列が空の場合も表示しない
+      if (logClassFilters.length === 0) return false
+
       if (!isSameDay(log.createdAt, selectedDayMs)) return false
       if (problemFilter !== 'all' && log.problemId !== problemFilter) return false
       
       const logClassId = log.classId || (log.seatNumber ? seatToClassMap.get(log.seatNumber.toUpperCase()) : null)
-      if (logClassFilter !== 'all' && logClassId !== logClassFilter) return false
+      
+      // ★修正：複数選択ロジック
+      // 「all」が含まれておらず、かつ、ログのクラスが選択リストに含まれていない場合は除外
+      if (!logClassFilters.includes('all')) {
+        if (!logClassId || !logClassFilters.includes(logClassId)) {
+          return false
+        }
+      }
 
+      // ... (質問タイプ、解決状況、座席フィルタはそのまま維持)
       const qt = normalizeQuestionType(log.questionType)
       if (questionTypeFilter !== 'all' && qt !== questionTypeFilter) return false
       if (resolvedFilter === 'resolved' && !log.resolved) return false
       if (resolvedFilter === 'unresolved' && log.resolved) return false
-
       if (selectedSeatForHistory) {
         const seat = (log.seatNumber ?? '').toUpperCase()
         if (seat !== selectedSeatForHistory) return false
       }
-
       return true
     })
-  }, [
-    chatLogs,
-    problemFilter,
-    questionTypeFilter,
-    resolvedFilter,
-    selectedDayMs,
-    selectedSeatForHistory,
-    logClassFilter,
-    seatToClassMap,
-  ])
+  }, [chatLogs, problemFilter, questionTypeFilter, resolvedFilter, selectedDayMs, selectedSeatForHistory, logClassFilters, seatToClassMap, assignedClass])
 
   const filteredSubmissions = useMemo(() => {
     return submissions.filter((s) => {
+      if (!assignedClass) return false
       if (!isSameDay(s.submittedAt, selectedDayMs)) return false
       if (problemFilter !== 'all' && s.problemId !== problemFilter) return false
-      
       const subClassId = s.classId || (s.seatNumber ? seatToClassMap.get(s.seatNumber.toUpperCase()) : null)
-      if (logClassFilter !== 'all' && subClassId !== logClassFilter) return false
+      if (!logClassFilters.includes('all')) {
+        if (!subClassId || !logClassFilters.includes(subClassId)) {
+          return false
+        }
+      }
 
       if (selectedSeatForHistory) {
         const seat = (s.seatNumber ?? '').toUpperCase()
         if (seat !== selectedSeatForHistory) return false
       }
-
       return true
     })
-  }, [submissions, problemFilter, selectedDayMs, selectedSeatForHistory, logClassFilter, seatToClassMap])
+  }, [submissions, problemFilter, selectedDayMs, selectedSeatForHistory, logClassFilters, seatToClassMap, assignedClass])
 
   const unifiedEntries: UnifiedEntry[] = useMemo(() => {
     const chats: UnifiedEntry[] = filteredChatLogs.map((c) => ({
@@ -724,15 +737,16 @@ export default function TeacherPage() {
               ※選択したクラスの学生のみが座席に表示されます。
             </div>
           </div>
-
           <div>
             <div className="font-semibold mb-1 text-gray-700 dark:text-gray-200">
               ログのクラス絞り込み
             </div>
             <select
               className="w-full border rounded px-2 py-1 bg-white dark:bg-gray-950 border-gray-200 dark:border-gray-800 text-gray-900 dark:text-gray-100"
-              value={logClassFilter}
-              onChange={(e) => setLogClassFilter(e.target.value)}
+              // 表示用バリューの判定（1つだけ選ばれている場合はそれを表示）
+              value={logClassFilters.length === 1 ? logClassFilters[0] : (logClassFilters.includes('all') ? 'all' : '')}
+              // 選択されたクラスだけを配列に入れて更新
+              onChange={(e) => setLogClassFilters([e.target.value])}
             >
               <option value="all">すべてのクラス (他クラスも表示)</option>
               {ALLOWED_CLASSES.map((c) => (
@@ -1137,7 +1151,7 @@ export default function TeacherPage() {
           <section className="space-y-2">
             <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2 mb-1">
               <h2 className="font-semibold text-sm text-gray-900 dark:text-gray-100">
-                ログ一覧（選択日: {logDateYMD}・チャット＋採点提出）
+                ログ一覧（選択日: {logDateYMD}）
               </h2>
               <div className="flex flex-col items-start md:items-end gap-1 text-xs text-gray-500 dark:text-gray-400">
                 <span>
@@ -1147,6 +1161,55 @@ export default function TeacherPage() {
                 </span>
               </div>
             </div>
+
+            {assignedClass && (
+              <div className="flex flex-wrap gap-2 pb-2 border-b border-gray-100 dark:border-gray-800">
+                {/* --- 全クラスボタン --- */}
+                <button
+                  // 配列に 'all' だけを入れる
+                  onClick={() => setLogClassFilters(['all'])}
+                  className={`px-3 py-1 rounded-full text-[10px] font-bold border transition-all ${
+                    // 配列に 'all' が含まれているか判定
+                    logClassFilters.includes('all')
+                      ? 'bg-gray-800 text-white border-gray-800 shadow-sm'
+                      : 'bg-white text-gray-500 border-gray-200 hover:bg-gray-50'
+                  }`}
+                >
+                  全クラス表示
+                </button>
+
+                {/* --- 各クラスボタン --- */}
+                {ALLOWED_CLASSES.map((c) => {
+                  const isSelected = logClassFilters.includes(c);
+                  return (
+                    <button
+                      key={c}
+                      onClick={() => {
+                        setLogClassFilters((prev) => {
+                          // 「全クラス」選択中に個別クラスを押した場合は「全クラス」を解除してそのクラスだけにする
+                          const base = prev.filter(f => f !== 'all');
+                          if (isSelected) {
+                            // すでに選択済みなら削除（デフォルトのクラスもこれで消せます）
+                            return base.filter((item) => item !== c);
+                          } else {
+                            // 未選択なら追加
+                            return [...base, c];
+                          }
+                        });
+                      }}
+                      className={`px-3 py-1 rounded-full text-[10px] font-bold border transition-all ${
+                        isSelected
+                          ? 'bg-blue-600 text-white border-blue-600 shadow-sm'
+                          : 'bg-blue-50 text-blue-600 border-blue-100 hover:bg-blue-100'
+                      }`}
+                    >
+                      {c === assignedClass ? `👨‍🏫 ${c}` : c}
+                      {isSelected && <span className="ml-1 opacity-70">×</span>}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
 
             {selectedSeatForHistory && (
               <div className="mb-2 flex items-center justify-between border rounded bg-blue-50 dark:bg-blue-950/40 px-3 py-1 text-[11px] text-blue-900 dark:text-blue-200 border-blue-200 dark:border-blue-900">
