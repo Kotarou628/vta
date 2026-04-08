@@ -737,25 +737,6 @@ export default function TeacherPage() {
               ※選択したクラスの学生のみが座席に表示されます。
             </div>
           </div>
-          <div>
-            <div className="font-semibold mb-1 text-gray-700 dark:text-gray-200">
-              ログのクラス絞り込み
-            </div>
-            <select
-              className="w-full border rounded px-2 py-1 bg-white dark:bg-gray-950 border-gray-200 dark:border-gray-800 text-gray-900 dark:text-gray-100"
-              // 表示用バリューの判定（1つだけ選ばれている場合はそれを表示）
-              value={logClassFilters.length === 1 ? logClassFilters[0] : (logClassFilters.includes('all') ? 'all' : '')}
-              // 選択されたクラスだけを配列に入れて更新
-              onChange={(e) => setLogClassFilters([e.target.value])}
-            >
-              <option value="all">すべてのクラス (他クラスも表示)</option>
-              {ALLOWED_CLASSES.map((c) => (
-                <option key={c} value={c}>
-                  {c}
-                </option>
-              ))}
-            </select>
-          </div>
 
           <div>
             <div className="font-semibold mb-1 text-gray-700 dark:text-gray-200">
