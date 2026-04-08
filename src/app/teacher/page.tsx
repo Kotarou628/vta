@@ -20,7 +20,7 @@ type QuestionType =
   | 'review'
   | 'algo'
   | 'free'
-  | 'basic' // ★ 新規追加: 初歩的な質問
+  | 'basic'
   | 'unknown'
 
 type ChatLog = {
@@ -70,7 +70,7 @@ type StudentSeat = {
   timerResumedAt?: Timestamp | null
   timerRunning?: boolean
   updatedAt?: Timestamp | null
-  classId?: string | null // 学生が保持しているクラス情報
+  classId?: string | null
 }
 
 const QUESTION_TYPE_LABEL: Record<QuestionType, string> = {
@@ -80,9 +80,18 @@ const QUESTION_TYPE_LABEL: Record<QuestionType, string> = {
   review: 'コードレビュー・バグの相談',
   algo: 'アルゴリズム・理論の相談',
   free: '自由記述の相談',
-  basic: '初歩的な質問', // ★ 新規追加
+  basic: '初歩的な質問',
   unknown: '（種類未入力）',
 }
+
+// ★ 固定のクラスリスト
+const ALLOWED_CLASSES = [
+  'ABクラス',
+  'CDクラス',
+  'EFクラス',
+  'JKL1クラス',
+  'JKL2クラス',
+]
 
 const normalizeQuestionType = (raw: any): QuestionType => {
   const v = (raw ?? '').toString().trim().toLowerCase()
@@ -262,9 +271,7 @@ export default function TeacherPage() {
   const [resolvedFilter, setResolvedFilter] = useState<'all' | 'resolved' | 'unresolved'>('all')
   const [limitCount, setLimitCount] = useState<number>(100)
 
-  // ★ 追加: 座席ビュー固定用の担当クラス
   const [assignedClass, setAssignedClass] = useState<string>('')
-  // ★ 追加: ログ一覧用のクラスフィルタ
   const [logClassFilter, setLogClassFilter] = useState<string>('all')
 
   const [logDateYMD, setLogDateYMD] = useState<string>(getTodayYMDLocal())
@@ -295,7 +302,6 @@ export default function TeacherPage() {
     return ms ?? nowMs
   }, [logDateYMD, nowMs])
 
-  // ★ 汎用的な 座席番号 → クラスID のマッピングを生成（ログ側の補完に利用）
   const seatToClassMap = useMemo(() => {
     const m = new Map<string, string>()
     students.forEach((s) => {
@@ -306,21 +312,6 @@ export default function TeacherPage() {
     })
     return m
   }, [students])
-
-  // 取得したデータから存在するクラス一覧を動的に生成
-  const availableClasses = useMemo(() => {
-    const classes = new Set<string>()
-    students.forEach((st) => st.classId && classes.add(st.classId))
-    chatLogs.forEach((log) => {
-      const cId = log.classId || (log.seatNumber ? seatToClassMap.get(log.seatNumber.toUpperCase()) : null)
-      if (cId) classes.add(cId)
-    })
-    submissions.forEach((sub) => {
-      const cId = sub.classId || (sub.seatNumber ? seatToClassMap.get(sub.seatNumber.toUpperCase()) : null)
-      if (cId) classes.add(cId)
-    })
-    return Array.from(classes).sort()
-  }, [chatLogs, submissions, students, seatToClassMap])
 
   useEffect(() => {
     const fetchProblems = async () => {
@@ -469,7 +460,7 @@ export default function TeacherPage() {
             timerResumedAt: d.timerResumedAt ?? null,
             timerRunning: !!d.timerRunning,
             updatedAt,
-            classId: d.classId ?? d.class ?? null, // フォールバック対応
+            classId: d.classId ?? d.class ?? null,
           })
         })
         setStudents(list)
@@ -519,10 +510,9 @@ export default function TeacherPage() {
     }
   }, [students.length, problemFilter, assignedClass])
 
-  // ★ 座席用：担当クラス (assignedClass) に属する学生のみマップに登録
   const studentSeatMap = useMemo(() => {
     const m = new Map<string, StudentSeat>()
-    if (!assignedClass) return m // クラス未選択時は空
+    if (!assignedClass) return m
 
     students.forEach((s) => {
       if (!s.seatNumber) return
@@ -533,7 +523,6 @@ export default function TeacherPage() {
     return m
   }, [students, assignedClass])
 
-  // ★ ログ用のフィルタリング：logClassFilter で絞る
   const filteredChatLogs = useMemo(() => {
     return chatLogs.filter((log) => {
       if (!isSameDay(log.createdAt, selectedDayMs)) return false
@@ -602,7 +591,6 @@ export default function TeacherPage() {
     return all
   }, [filteredChatLogs, filteredSubmissions])
 
-  // 座席上の情報（ログ起因）：担当クラス (assignedClass) に属するもののみ取得
   const seatLatestAnyProblemMap = useMemo(() => {
     const m = new Map<string, { problemId: string; title: string; createdAt: Timestamp | null; durationSec?: number }>()
     if (!assignedClass) return m
@@ -716,7 +704,6 @@ export default function TeacherPage() {
       <div className="flex flex-1 overflow-hidden">
         <aside className="w-64 border-r p-3 text-xs bg-gray-50 dark:bg-gray-900 space-y-3 overflow-y-auto border-gray-200 dark:border-gray-800">
           
-          {/* ★ 担当クラス設定 (座席ビュー固定) */}
           <div className="p-2 -mx-2 bg-blue-50 dark:bg-blue-900/30 border-y border-blue-200 dark:border-blue-800 mb-2">
             <div className="font-bold text-blue-900 dark:text-blue-200 mb-1 text-[11px]">
               👨‍🏫 担当クラス (座席ビュー固定)
@@ -727,7 +714,7 @@ export default function TeacherPage() {
               onChange={(e) => setAssignedClass(e.target.value)}
             >
               <option value="" disabled>最初に選択してください</option>
-              {availableClasses.map((c) => (
+              {ALLOWED_CLASSES.map((c) => (
                 <option key={c} value={c}>
                   {c}
                 </option>
@@ -738,7 +725,6 @@ export default function TeacherPage() {
             </div>
           </div>
 
-          {/* ★ ログのクラスフィルタ */}
           <div>
             <div className="font-semibold mb-1 text-gray-700 dark:text-gray-200">
               ログのクラス絞り込み
@@ -749,7 +735,7 @@ export default function TeacherPage() {
               onChange={(e) => setLogClassFilter(e.target.value)}
             >
               <option value="all">すべてのクラス (他クラスも表示)</option>
-              {availableClasses.map((c) => (
+              {ALLOWED_CLASSES.map((c) => (
                 <option key={c} value={c}>
                   {c}
                 </option>
@@ -826,7 +812,7 @@ export default function TeacherPage() {
               <option value="review">コードレビュー・バグの相談</option>
               <option value="algo">アルゴリズム・理論の相談</option>
               <option value="free">自由記述の相談</option>
-              <option value="basic">初歩的な質問</option> {/* ★ 追加 */}
+              <option value="basic">初歩的な質問</option>
               <option value="unknown">（種類未入力）</option>
             </select>
           </div>
@@ -889,7 +875,6 @@ export default function TeacherPage() {
               </div>
             </div>
 
-            {/* ★ 担当クラスが未選択の場合はプレースホルダを表示 */}
             {!assignedClass ? (
               <div className="py-20 text-center text-gray-500 dark:text-gray-400">
                 <p className="text-sm font-semibold mb-2">担当クラスが選択されていません</p>
@@ -939,23 +924,8 @@ export default function TeacherPage() {
                               block.cols.map((col) => {
                                 const seatId = `${col}${row}`
 
-                                // 担当クラスに該当する学生・ログのみ取得済みのマップから参照
                                 const seatInfo = studentSeatMap.get(seatId)
                                 const latestAny = seatLatestAnyProblemMap.get(seatId)
-
-                                // ★ その座席に担当クラスの学生情報やログが何も無い場合は「空席」として表示
-                                if (!seatInfo && !latestAny) {
-                                  return (
-                                    <div
-                                      key={seatId}
-                                      className="flex flex-col items-center justify-center h-14 border bg-gray-50 dark:bg-gray-900 opacity-30 border-gray-200 dark:border-gray-800"
-                                    >
-                                      <div className={`text-[11px] text-gray-400 ${seatRotated ? 'transform rotate-180' : ''}`}>
-                                        {seatId}
-                                      </div>
-                                    </div>
-                                  )
-                                }
 
                                 const currentProblemId =
                                   seatInfo?.currentProblemId ??
@@ -1207,7 +1177,6 @@ export default function TeacherPage() {
                   const qt = normalizeQuestionType(log.questionType)
                   const qtLabel = QUESTION_TYPE_LABEL[qt] ?? QUESTION_TYPE_LABEL.unknown
                   
-                  // 学生情報（座席）からクラス情報を補完
                   const cId = log.classId || (log.seatNumber ? seatToClassMap.get(log.seatNumber.toUpperCase()) : null)
 
                   return (
