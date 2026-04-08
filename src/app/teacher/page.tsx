@@ -10,6 +10,7 @@ import {
   limit,
   Timestamp,
   onSnapshot,
+  where,
 } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
 
@@ -316,26 +317,23 @@ export default function TeacherPage() {
   useEffect(() => {
     const fetchProblems = async () => {
       try {
-        const snap = await getDocs(
-          query(
-            collection(db, 'chatLogs'),
-            orderBy('createdAt', 'desc'),
-            limit(300)
-          )
+        const q = query(
+          collection(db, 'problem'),
+          where('visibleInChat', '==', true) 
         )
-        const map = new Map<string, string>()
-        snap.forEach((doc) => {
-          const d = doc.data() as any
-          if (d.problemId && d.problemTitle) {
-            if (!map.has(d.problemId)) {
-              map.set(d.problemId, d.problemTitle)
-            }
+        
+        const snap = await getDocs(q)
+        const list = snap.docs.map((doc) => {
+          const d = doc.data()
+          return {
+            id: doc.id,
+            title: d.title || '(タイトルなし)',
           }
         })
-        const list = Array.from(map.entries()).map(([id, title]) => ({
-          id,
-          title,
-        }))
+        
+        // タイトル順などで並び替えると使いやすくなります
+        list.sort((a, b) => a.title.localeCompare(b.title))
+        
         setProblemOptions(list)
       } catch (e) {
         console.error('[teacher] fetchProblems failed:', e)
@@ -682,26 +680,16 @@ export default function TeacherPage() {
               setNowMs(Date.now())
               ;(async () => {
                 try {
-                  const snap = await getDocs(
-                    query(
-                      collection(db, 'chatLogs'),
-                      orderBy('createdAt', 'desc'),
-                      limit(300)
-                    )
+                  const q = query(
+                    collection(db, 'problem'),
+                    where('visibleInChat', '==', true)
                   )
-                  const map = new Map<string, string>()
-                  snap.forEach((doc) => {
-                    const d = doc.data() as any
-                    if (d.problemId && d.problemTitle) {
-                      if (!map.has(d.problemId)) {
-                        map.set(d.problemId, d.problemTitle)
-                      }
-                    }
-                  })
-                  const list = Array.from(map.entries()).map(([id, title]) => ({
-                    id,
-                    title,
+                  const snap = await getDocs(q)
+                  const list = snap.docs.map((doc) => ({
+                    id: doc.id,
+                    title: doc.data().title || '(タイトルなし)',
                   }))
+                  list.sort((a, b) => a.title.localeCompare(b.title))
                   setProblemOptions(list)
                 } catch (e) {
                   console.error('[teacher] reload fetchProblems failed:', e)
