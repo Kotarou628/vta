@@ -1,4 +1,5 @@
 // src/app/chat/page.tsx
+export const dynamic = 'force-dynamic';
 'use client'
 
 import React, {

@@ -11,14 +11,6 @@ const firebaseConfig = {
   storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET!,
 }
 
-// ★ ここを一時的に追加（デバッグ用）
-console.log('[firebaseConfig from env]', {
-  apiKey: firebaseConfig.apiKey,
-  authDomain: firebaseConfig.authDomain,
-  projectId: firebaseConfig.projectId,
-  storageBucket: firebaseConfig.storageBucket,
-})
-
 export const app = getApps().length ? getApp() : initializeApp(firebaseConfig)
 export const db = getFirestore(app)
 export const auth = getAuth(app)
