@@ -1,5 +1,6 @@
 // src/app/problem/page.tsx
 'use client'
+export const dynamic = 'force-dynamic';
 
 import { useEffect, useState, useCallback, DragEvent, ChangeEvent } from 'react'
 import ProblemList from '@/components/ProblemList'
