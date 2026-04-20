@@ -9,6 +9,7 @@ import 'katex/dist/katex.min.css'
 import ProblemList from '@/components/ProblemList'
 import type { Problem as ProblemType, SolutionFile } from '@/types/problem'
 
+
 const DEBUG = true
 const dlog = (...args: any[]) => {
   if (DEBUG) console.log('[ProblemPage DEBUG]', ...args)
@@ -221,7 +222,8 @@ export default function ProblemPage() {
             <label className="text-xs font-bold text-gray-400">ライブプレビュー (スクロール同期)</label>
             <div 
               ref={previewRef} 
-              className="w-full border-2 p-5 rounded-lg h-[400px] md:h-full overflow-auto bg-gray-50 prose prose-blue max-w-none shadow-inner"
+              className="w-full border-2 p-5 rounded-lg h-[400px] md:h-full overflow-auto bg-gray-50 prose prose-blue max-w-none shadow-inner whitespace-pre-wrap font-mono"
+              style={{ lineHeight: '1.2' }}
             >
               <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
                 {newDescription || '*プレビューがここに表示されます*'}
