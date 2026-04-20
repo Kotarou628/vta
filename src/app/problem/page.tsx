@@ -8,6 +8,7 @@ import rehypeKatex from 'rehype-katex'
 import 'katex/dist/katex.min.css'
 import ProblemList from '@/components/ProblemList'
 import type { Problem as ProblemType, SolutionFile } from '@/types/problem'
+import remarkBreaks from 'remark-breaks'
 
 
 const DEBUG = true
@@ -225,7 +226,17 @@ export default function ProblemPage() {
               className="w-full border-2 p-5 rounded-lg h-[400px] md:h-full overflow-auto bg-gray-50 prose prose-blue max-w-none shadow-inner whitespace-pre-wrap font-mono"
               style={{ lineHeight: '1.2' }}
             >
-              <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
+              <ReactMarkdown 
+                remarkPlugins={[remarkMath, remarkBreaks]} // ★ 改行プラグインを適用
+                rehypePlugins={[rehypeKatex]}
+                components={{
+                  // ★ 段落(p)でスペースと改行をそのまま表示するように設定
+                  p: ({ children }) => <p style={{ whiteSpace: 'pre-wrap', margin: '0 0 1em 0' }}>{children}</p>,
+                  // ★ コードブロック内でもインデントを保持
+                  code: ({ children }) => <code style={{ whiteSpace: 'pre-wrap', fontFamily: 'inherit' }}>{children}</code>,
+                  pre: ({ children }) => <pre style={{ whiteSpace: 'pre-wrap', backgroundColor: '#f3f4f6', padding: '1rem', borderRadius: '0.5rem' }}>{children}</pre>
+                }}
+              >
                 {newDescription || '*プレビューがここに表示されます*'}
               </ReactMarkdown>
             </div>

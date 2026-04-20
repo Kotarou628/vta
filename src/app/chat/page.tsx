@@ -24,6 +24,7 @@ import { getStorage, ref as sRef, uploadString, getDownloadURL } from 'firebase/
 
 import ReactMarkdown from 'react-markdown'
 import remarkMath from 'remark-math'
+import remarkBreaks from 'remark-breaks'
 import rehypeKatex from 'rehype-katex'
 import 'katex/dist/katex.min.css'
 
@@ -472,37 +473,60 @@ function highlightInline(line: string): ReactNode[] {
 function renderHighlightedDescription(desc: string) {
   if (!desc) return null;
   return (
-    <div className="prose prose-sm dark:prose-invert max-w-none leading-relaxed 
-                    prose-p:my-2 prose-headings:mb-2 prose-li:my-0
-                    prose-hr:my-4 prose-strong:text-blue-600 dark:prose-strong:text-blue-400">
+    <div 
+      className="prose prose-sm dark:prose-invert max-w-none whitespace-pre-wrap overflow-x-auto"
+      style={{ 
+        fontFamily: '"BIZ UDMonospace", "BIZ UDGothic", "MS Gothic", monospace',
+        letterSpacing: '0',
+      }}
+    >
       <ReactMarkdown 
         remarkPlugins={[remarkMath]} 
         rehypePlugins={[rehypeKatex]}
         components={{
-          // 型エラー解消の決定版： node, cite, ref を取り除いてから ...props を渡す
-          blockquote: ({ node, cite, ref, children, ...props }: any) => {
-              const { align, ...safeProps } = props;
-              return (
-                <div 
-                  className="border-l-4 border-amber-500 bg-amber-50 dark:bg-amber-900/20 p-4 my-4 rounded-r-md"
-                  {...safeProps}
-                >
-                  {children}
-                </div>
-              );
-            },
-
-          // div の方も同様に node, ref を除外して安全性を高めます
-          div: ({ node, ref, className, children, ...props }) => {
-            if (className?.includes('math-display')) {
-              return (
-                <div className="my-6 text-center text-lg overflow-x-auto" {...props}>
-                  {children}
-                </div>
-              );
+          // 1. 段落(p)の設定：図形の行は密着、文章の行は適度な余白
+          p: ({ children }) => {
+            const text = React.Children.toArray(children).join('');
+            const isGrid = /[＋｜ー■〇２－+-]/.test(text);
+            return (
+              <p 
+                className="m-0 p-0" 
+                style={{ 
+                  lineHeight: isGrid ? '1.0' : '1.7', 
+                  marginBottom: isGrid ? '0' : '1.2em' 
+                }}
+              >
+                {children}
+              </p>
+            );
+          },
+          // 2. コードブロック(pre)の設定：背景を透明にし、枠線で区切る
+          pre: ({ children }) => (
+            <pre className="p-4 rounded-xl bg-transparent text-current my-6 overflow-x-auto border border-gray-200 dark:border-gray-800">
+              {children}
+            </pre>
+          ),
+          // 3. コード(code)の設定：背景色を排除し、文字色を周囲の文章に合わせる
+          code: ({ inline, children, ...props }: any) => {
+            if (inline) {
+              return <code className="bg-gray-100 dark:bg-gray-800 px-1.5 py-0.5 rounded text-rose-500 font-mono" {...props}>{children}</code>;
             }
-            return <div className={className} {...props}>{children}</div>;
-          }
+            return (
+              <code 
+                className="block leading-relaxed text-sm font-mono text-gray-900 dark:text-gray-100" 
+                style={{ whiteSpace: 'pre' }} 
+                {...props}
+              >
+                {children}
+              </code>
+            );
+          },
+          // 4. その他（引用など）
+          blockquote: ({ children }) => (
+            <div className="border-l-4 border-amber-500 bg-amber-50 dark:bg-amber-900/20 p-4 my-4 rounded-r-md leading-normal">
+              {children}
+            </div>
+          ),
         }}
       >
         {desc}
