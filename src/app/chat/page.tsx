@@ -1442,15 +1442,13 @@ export default function ChatPage() {
 
 `
     const syntaxIntro = `【文法・書き方の相談】
+    
+※「どう書けばいいか」を知りたい**具体的なパーツの名前（メソッド名や構文名）**を教えてください。
 
-※あなたの理解度に合わせて説明したいので…
- どこまで理解していて、どこが不安なのか
- 少しだけ教えていただけると助かります。
+※注意：「show」「表示」といった曖昧な言葉だけでは、どのプログラムの書き方を説明すべきか判断できません。
+「拡張for文」「nextInt」「charAt」のように具体的に入力してください。
 
-※２の「どう動かしたいか（目的）」は *任意* です。
- 書ける範囲で構いませんが、書いてもらえると
- よりあなたの状況に合った説明がしやすくなります。
-
+※入力された名前に基づいて、AIが「書き方」「例文」「実行結果」「値の動き」の4点セットで解説します。
 `
     const reviewIntro = `【コードレビュー・バグの相談】
 
@@ -1540,20 +1538,17 @@ export default function ChatPage() {
             key: 'syn-name',
             label:
               syntaxIntro +
-              '１：使いたいものの名前（メソッド / 変数）\n' +
-              '   例：拡張for文、nextInt、length、parseInt など',
-            placeholder: '例）拡張for文の書き方／nextInt の使い方 など',
+              '\n１：調べたい名前（メソッド名・構文名など）',
+            placeholder: '例）拡張for文の書き方、nextIntの使い方、charAtなど',
             value: hintQuestion,
             setValue: setHintQuestion,
           },
           {
             key: 'syn-goal',
             label:
-              syntaxIntro +
-              '２：どう動かしたいか（目的）※任意（書ける範囲でOK）\n' +
+              '２：どう動かしたいか（目的） ※任意\n' +
               '   例：配列の全要素を順番に取り出したい など',
-            placeholder:
-              '（任意）例）配列の中身を順番に表示したい／文字列から1文字ずつ取り出したい など',
+            placeholder: '（任意）例）0〜3の乱数を作りたい、文字列から1文字ずつ取り出したい など',
             value: hintCode,
             setValue: setHintCode,
           },
@@ -1777,8 +1772,63 @@ export default function ChatPage() {
     const modeDesc = describeQuestionMode(qType)
 
     let promptForLLM = ''
+    if (qType === 'syntax') {
+        const syntaxAbstractionRules = String.raw`
+        【書き方相談：4点セット解説ルール】
+        あなたは「文法の仕組み・データの流れ・実行結果」をセットで教える教員です。
+        以下の4つの要素を必ず含めて回答してください。
 
-    if (qType === 'error' || qType === 'review') {
+        1. **基本の型（テンプレート）**:
+          - 構文の一般的な書き方を、ClassA / value1 / array1 などの抽象的な名前で示してください。
+
+        2. **具体的な例文**:
+          - 課題とは**無関係な日常的なデータ**（例：果物、テスト点数など）を使った数行のコードを提示してください。
+
+        3. **実行結果**:
+          - 上記の例文を実際に実行した際、コンソールにどのように表示されるかを明示してください。
+
+        4. **値の動き（トレース）**:
+          - 処理が進むごとに「どの変数に何が入り、どう変化するか」を言葉でステップバイステップで説明してください。
+
+        【厳守事項】
+        - 課題の単語（grid, mine, res, dicなど）は絶対に使わないでください。
+        `.trim()
+
+              promptForLLM = String.raw`
+        # 役割
+        プログラミングの文法講師。
+
+        # 指針
+        - 全ての回答は必ず「結論ファースト」で記述すること。
+        - 抽象的な型 → 具体的な例文 → 実行結果 → 値の動き（トレース） の順で構成すること。
+        - 課題のロジック（解き方）を代行してはいけません。
+
+        # 学生の質問
+        ${userContent}
+
+        # 出力フォーマット
+        アドバイス: (その文法のメリットを簡潔に)
+
+        コード例: 
+        \`\`\`${lang}
+        // 1. 基本の型
+        [抽象的なテンプレート]
+
+        // 2. 具体的な例文
+        [課題と無関係な例]
+        \`\`\`
+
+        実行結果:
+        \`\`\`text
+        [この例文を動かした時の出力]
+        \`\`\`
+
+        値の動き:
+        - (変数の変化を詳しく説明)
+
+        質問: (理解を確認する問いかけ)
+        `.trim()
+      } else if (qType === 'error' || qType === 'review') {
       const exemplarForPrompt = (problem.solution_files || [])
         .map((f) => {
           const l = (f.language && f.language.trim()) || detectLang(f.code)
@@ -1818,93 +1868,93 @@ export default function ChatPage() {
       ${abstractionRules}
       ${outputRule(lang)}`
     } else if (qType === 'task') {
-      promptForLLM = String.raw`
-あなたは、プログラミング課題の「読み解き」と「作業工程の整理」を手伝う教員です。
+        promptForLLM = String.raw`
+        あなたは、プログラミング課題の「読み解き」と「作業工程の整理」を手伝う教員です。
 
-【文章構成ルール（最重要）】
-- 全ての回答は必ず「結論ファースト（結論→理由・説明）」の順序で記述してください。
-- 最初の1文目で、質問に対する直接的な答えや最も重要なポイント（結論）を端的に述べてください。
+        【文章構成ルール（最重要）】
+        - 全ての回答は必ず「結論ファースト（結論→理由・説明）」の順序で記述してください。
+        - 最初の1文目で、質問に対する直接的な答えや最も重要なポイント（結論）を端的に述べてください。
 
-【重要制約】
-- 具体的なコード例・疑似コード・数式の形のアルゴリズムは一切書かないでください。
-- \`\`\` やコードブロック、セミコロン付きの行など、「そのまま写せば動きそうなもの」は出してはいけません。
-- 代わりに、「課題文のどの部分をどう読むか」「どの順番で手を動かせば良いか」を日本語の文章と箇条書きだけで説明してください。
+        【重要制約】
+        - 具体的なコード例・疑似コード・数式の形のアルゴリズムは一切書かないでください。
+        - \`\`\` やコードブロック、セミコロン付きの行など、「そのまま写せば動きそうなもの」は出してはいけません。
+        - 代わりに、「課題文のどの部分をどう読むか」「どの順番で手を動かせば良いか」を日本語の文章と箇条書きだけで説明してください。
 
-【相談モード】
-${modeDesc}
+        【相談モード】
+        ${modeDesc}
 
-【今回の授業内容（教員メモ）】
-${CURRENT_LESSON_DESCRIPTION}
+        【今回の授業内容（教員メモ）】
+        ${CURRENT_LESSON_DESCRIPTION}
 
-【今回扱っている問題】
-${problem.title}
-${problem.description}
+        【今回扱っている問題】
+        ${problem.title}
+        ${problem.description}
 
-【これまでの履歴要約】
-${summary}
+        【これまでの履歴要約】
+        ${summary}
 
-【学生の状況・考え（コード全体を含む）】
-${userContent}
+        【学生の状況・考え（コード全体を含む）】
+        ${userContent}
 
-[出力形式（長文禁止・可読性重視）]
-以下の順序と制限を守り、パッと見て読める簡潔な文章で出力すること。
-1) 結論：課題のゴールの言い換え（1〜2文で端的に）
-2) 作業工程のステップ（番号付きで3〜5ステップ程度に絞る。重要なキーワードは**太字**にする）
-3) 「今すぐできそうな最初の一歩」を1〜2文で提案
-※ 各項目の間には空行を入れて視覚的な余白を作ること。
+        [出力形式（長文禁止・可読性重視）]
+        以下の順序と制限を守り、パッと見て読める簡潔な文章で出力すること。
+        1) 結論：課題のゴールの言い換え（1〜2文で端的に）
+        2) 作業工程のステップ（番号付きで3〜5ステップ程度に絞る。重要なキーワードは**太字**にする）
+        3) 「今すぐできそうな最初の一歩」を1〜2文で提案
+        ※ 各項目の間には空行を入れて視覚的な余白を作ること。
 
-`.trim()
+        `.trim()
     } else if (qType === 'free' || qType === 'basic') {
       promptForLLM = String.raw`${FREE_TEXT_PROMPT}
 
-【相談モード】
-${modeDesc}
+        【相談モード】
+        ${modeDesc}
 
-【これまでの履歴要約】
-${summary}
+        【これまでの履歴要約】
+        ${summary}
 
-【学生の相談内容】
-${userContent}
-`
-    } else {
-      const bannedIdList = extractIdentifiersFromSolutionFiles(problem.solution_files || [])
-      const bannedSection = bannedIdList.length
-        ? `\n【禁止識別子リスト（重要）】
-以下の名前は現在の課題の模範コードで使われています。これらと同じ名前を新しく出すコード例に使ってはいけません：
-${bannedIdList.join(', ')}
+        【学生の相談内容】
+        ${userContent}
+        `
+            } else {
+              const bannedIdList = extractIdentifiersFromSolutionFiles(problem.solution_files || [])
+              const bannedSection = bannedIdList.length
+                ? `\n【禁止識別子リスト（重要）】
+        以下の名前は現在の課題の模範コードで使われています。これらと同じ名前を新しく出すコード例に使ってはいけません：
+        ${bannedIdList.join(', ')}
 
-【今回扱っている問題】
-${problem.title}
-${problem.description}
-`
-        : ''
+        【今回扱っている問題】
+        ${problem.title}
+        ${problem.description}
+        `
+                : ''
 
-      const abstractionRules = buildAbstractionRulesForExample(lang)
+              const abstractionRules = buildAbstractionRulesForExample(lang)
 
-      promptForLLM = String.raw`${BASE_TEACHER_PROMPT(lang)}
+              promptForLLM = String.raw`${BASE_TEACHER_PROMPT(lang)}
 
-【相談モード】
-${modeDesc}
+        【相談モード】
+        ${modeDesc}
 
-【これまでの履歴要約】
-${summary}
+        【これまでの履歴要約】
+        ${summary}
 
-【学生の質問/考え】
-${userContent}
+        【学生の質問/考え】
+        ${userContent}
 
-[追加ルール（重要）]
-- コード例を出すときは、現在授業で扱っている問題や模範コードで使われているものとは
-  「全く違う変数名・メソッド名・クラス名」を使ってください。
-  例: sum → totalX, count → itemCnt, Main → SampleDemo など。
-- ただし、役割が分からなくならないように、意味が想像しやすい名前（value1, totalCount など）にしてください。
-- 正解コード全体や、そのまま提出すると通ってしまう完成コードは出さないでください。
-- あくまで「考え方」と「部分的なコード例」にとどめてください。
-${bannedSection}
+        [追加ルール（重要）]
+        - コード例を出すときは、現在授業で扱っている問題や模範コードで使われているものとは
+          「全く違う変数名・メソッド名・クラス名」を使ってください。
+          例: sum → totalX, count → itemCnt, Main → SampleDemo など。
+        - ただし、役割が分からなくならないように、意味が想像しやすい名前（value1, totalCount など）にしてください。
+        - 正解コード全体や、そのまま提出すると通ってしまう完成コードは出さないでください。
+        - あくまで「考え方」と「部分的なコード例」にとどめてください。
+        ${bannedSection}
 
-【コード例の抽象化ルール】
-${abstractionRules}
+        【コード例の抽象化ルール】
+        ${abstractionRules}
 
-${outputRule(lang)}`
+      ${outputRule(lang)}`
     }
 
     setLoading(true)
