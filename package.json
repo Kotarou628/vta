@@ -17,10 +17,16 @@
     "ai": "^5.0.9",
     "firebase": "^12.0.0",
     "firebase-admin": "^13.4.0",
-    "next": "15.3.3",
+    "katex": "^0.16.45",
+    "lucide-react": "^1.8.0",
+    "next": "^16.2.3",
     "prisma": "^6.9.0",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5",
+    "react-markdown": "^10.1.0",
+    "rehype-katex": "^7.0.1",
+    "remark-breaks": "^4.0.0",
+    "remark-math": "^6.0.0"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3",
@@ -30,7 +36,7 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
-    "eslint-config-next": "15.3.3",
+    "eslint-config-next": "^16.2.3",
     "tailwindcss": "^4",
     "typescript": "^5"
   }

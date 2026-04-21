@@ -1,5 +1,6 @@
 // src/app/chat/page.tsx
 'use client'
+export const dynamic = 'force-dynamic';
 
 import React, {
   useEffect, useMemo, useRef, useState, ReactNode,
@@ -20,6 +21,12 @@ import { db, auth } from '@/lib/firebase'
 
 // Storage（提出原本の保存）
 import { getStorage, ref as sRef, uploadString, getDownloadURL } from 'firebase/storage'
+
+import ReactMarkdown from 'react-markdown'
+import remarkMath from 'remark-math'
+import remarkBreaks from 'remark-breaks'
+import rehypeKatex from 'rehype-katex'
+import 'katex/dist/katex.min.css'
 
 /* ================== テーマ（dark/light） ================== */
 const THEME_KEY = 'theme' // 'light' | 'dark' | 'system'
@@ -464,53 +471,66 @@ function highlightInline(line: string): ReactNode[] {
 }
 
 function renderHighlightedDescription(desc: string) {
-  const lines = normalize(desc).split('\n')
-  type Block = { type: 'p'; text: string } | { type: 'ul'; items: string[] } | { type: 'ol'; items: string[] }
-  const blocks: Block[] = []; let current: Block | null = null
-  const push = () => { if (current) blocks.push(current); current = null }
-
-  for (const raw of lines) {
-    const line = raw.trim()
-    if (!line) { push(); blocks.push({ type: 'p', text: '' }); continue }
-    const step = line.match(/^(\d+)[\.\)\}]?[ 　、．)](.*)$/)
-    if (step) {
-      const body = (step[2] || '').trim()
-      if (!current || current.type !== 'ol') { push(); current = { type: 'ol', items: [] } }
-      current.items.push(body); continue
-    }
-    if (/^[-–—*・※]\s+/.test(line)) {
-      const body = line.replace(/^[-–—*・※]\s+/, '')
-      if (!current || current.type !== 'ul') { push(); current = { type: 'ul', items: [] } }
-      current.items.push(body); continue
-    }
-    push(); blocks.push({ type: 'p', text: line })
-  }
-  push()
-
+  if (!desc) return null;
   return (
-    <div className="text-sm leading-relaxed whitespace-pre-wrap break-words text-gray-900 dark:text-gray-100">
-      {blocks.map((b, i) =>
-        b.type === 'ul' ? (
-          <ul key={`ul-${i}`} className="list-disc pl-5 my-1 space-y-0.5">
-            {b.items.map((it, j) => <li key={j}>{highlightInline(it)}</li>)}
-          </ul>
-        ) : b.type === 'ol' ? (
-          <ol key={`ol-${i}`} className="list-decimal pl-5 my-1 space-y-0.5">
-            {b.items.map((it, j) => <li key={j}>{highlightInline(it)}</li>)}
-          </ol>
-        ) : (
-          <p
-            key={`p-${i}`}
-            className={
-              KW_H.test(b.text) || LINE_L.test(b.text)
-                ? 'py-0.5 pl-2 border-l-4 border-rose-300/70 text-gray-900 dark:text-gray-100'
-                : 'py-0.5 text-gray-900 dark:text-gray-100'
+    <div 
+      className="prose prose-sm dark:prose-invert max-w-none whitespace-pre-wrap overflow-x-auto"
+      style={{ 
+        fontFamily: '"BIZ UDMonospace", "BIZ UDGothic", "MS Gothic", monospace',
+        letterSpacing: '0',
+      }}
+    >
+      <ReactMarkdown 
+        remarkPlugins={[remarkMath]} 
+        rehypePlugins={[rehypeKatex]}
+        components={{
+          // 1. 段落(p)の設定：図形の行は密着、文章の行は適度な余白
+          p: ({ children }) => {
+            const text = React.Children.toArray(children).join('');
+            const isGrid = /[＋｜ー■〇２－+-]/.test(text);
+            return (
+              <p 
+                className="m-0 p-0" 
+                style={{ 
+                  lineHeight: isGrid ? '1.0' : '1.7', 
+                  marginBottom: isGrid ? '0' : '1.2em' 
+                }}
+              >
+                {children}
+              </p>
+            );
+          },
+          // 2. コードブロック(pre)の設定：背景を透明にし、枠線で区切る
+          pre: ({ children }) => (
+            <pre className="p-4 rounded-xl bg-transparent text-current my-6 overflow-x-auto border border-gray-200 dark:border-gray-800">
+              {children}
+            </pre>
+          ),
+          // 3. コード(code)の設定：背景色を排除し、文字色を周囲の文章に合わせる
+          code: ({ inline, children, ...props }: any) => {
+            if (inline) {
+              return <code className="bg-gray-100 dark:bg-gray-800 px-1.5 py-0.5 rounded text-rose-500 font-mono" {...props}>{children}</code>;
             }
-          >
-            {highlightInline(b.text)}
-          </p>
-        )
-      )}
+            return (
+              <code 
+                className="block leading-relaxed text-sm font-mono text-gray-900 dark:text-gray-100" 
+                style={{ whiteSpace: 'pre' }} 
+                {...props}
+              >
+                {children}
+              </code>
+            );
+          },
+          // 4. その他（引用など）
+          blockquote: ({ children }) => (
+            <div className="border-l-4 border-amber-500 bg-amber-50 dark:bg-amber-900/20 p-4 my-4 rounded-r-md leading-normal">
+              {children}
+            </div>
+          ),
+        }}
+      >
+        {desc}
+      </ReactMarkdown>
     </div>
   )
 }
@@ -1031,22 +1051,20 @@ export default function ChatPage() {
   }, [])
 
   useEffect(() => {
-    console.group('[STUDENTS EFFECT]')
-    const seat = normalizeSeatNumber(getSeatNumberFromStorage() ?? seatNumber ?? null)
+    // 1. まず ID と座席番号を取得
     const docId = resolveStudentDocId()
+    const seat = normalizeSeatNumber(getSeatNumberFromStorage() ?? seatNumber ?? null)
+
+    // 2. docId が無い（認証待ちなどの）間は、ログを出さずに静かに終了する
+    // これによりコンソールの「学籍IDを決定できませんでした」というノイズが解消されます
+    if (!docId) {
+      return
+    }
+
+    // 3. ID が確定している場合のみ、同期処理とログ出力を開始
+    console.group('[STUDENTS EFFECT]')
     console.log('seat(from storage/state) =', seat)
     console.log('docId(from resolveStudentDocId) =', docId)
-
-    if (!docId && !seat) {
-      console.log('=> docId も seat も無いので何もしません')
-      console.groupEnd()
-      return
-    }
-    if (!docId) {
-      console.log('=> seat はあるが docId が無いので何もしません')
-      console.groupEnd()
-      return
-    }
 
     const ref = doc(db, 'students', docId)
     ;(async () => {
@@ -1083,7 +1101,7 @@ export default function ChatPage() {
         console.groupEnd()
       }
     })()
-  }, [seatNumber, studentId])
+  }, [seatNumber, studentId]) // studentId がセットされた瞬間に再実行されます
 
   // ====== タイマー ======
   const [elapsedSec, setElapsedSec] = useState(0)
@@ -1770,31 +1788,35 @@ export default function ChatPage() {
 
       const abstractionRules = buildAbstractionRulesForExample(lang)
 
-      promptForLLM = String.raw`${BASE_TEACHER_PROMPT(lang)}
+      promptForLLM = String.raw`
+      # 役割
+      あなたは、プログラミングを正しく教えられる教員です。
+      ${BASE_TEACHER_PROMPT(lang)}
 
-【相談モード】
-${modeDesc}
+      # 指導のスコープ（重要）
+      以下の「模範コード」で使われている文法・アルゴリズムのみを正解の範囲としています。
+      これに含まれない高度な記法（Stream APIやLambdaなど）は、学生が未修得の可能性があるため、絶対に使用しないでください。
 
-【今回の授業内容（教員メモ）】
-${CURRENT_LESSON_DESCRIPTION}
+      # インプットデータ
+      - 相談モード: ${modeDesc}
+      - 教員メモ: ${CURRENT_LESSON_DESCRIPTION}
+      - 今回の問題: ${problem.title} / ${problem.description}
+      - 模範コード（正解の基準）: 
+      ${exemplarForPrompt || '(この問題には模範コードが設定されていません)'}
 
-【今回扱っている問題】
-${problem.title}
-${problem.description}
+      - 履歴要約: ${summary}
+      - 学生の提出内容:
+      ${userContent}
 
-【模範コード（参考・任意）】
-${exemplarForPrompt || '(この問題には模範コードが設定されていません)'}
+      ---
+      # 回答における絶対制約
+      1. **結論ファースト**: 冒頭の1文目で、必ず質問に対する直接的な答え（バグの原因や修正方針）を述べてください。
+      2. **完全抽象化**: 「コード例:」の中では、具体的な数値、文字列リテラル、複雑な演算式を一切出さないでください。必ずTODOコメント（例：// TODO: 演算式を書く）に置き換えてください。
+      3. **文法制限**: アドバイスおよびコード例は、上記の「模範コード」で使用されている範囲の文法のみで構成してください。
 
-【これまでの履歴要約】
-${summary}
-
-【学生のコード・エラーや挙動の説明】
-${userContent}
-
-【コード例の抽象化ルール】
-${abstractionRules}
-
-${outputRule(lang)}`
+      # フォーマット指定
+      ${abstractionRules}
+      ${outputRule(lang)}`
     } else if (qType === 'task') {
       promptForLLM = String.raw`
 あなたは、プログラミング課題の「読み解き」と「作業工程の整理」を手伝う教員です。
@@ -1960,6 +1982,7 @@ ${outputRule(lang)}`
       const seatRaw = getSeatNumberFromStorage() ?? seatNumber ?? null
       const seat = normalizeSeatNumber(seatRaw)
       const user = auth.currentUser
+      const classId = localStorage.getItem('classId') || localStorage.getItem('class') || null;
 
       const msgs = allMessages[problem.id] || []
       let assistantMessage = ''
@@ -2017,6 +2040,7 @@ ${outputRule(lang)}`
         resolved,
         seatNumber: seat ?? null,
         studentId: studentId ?? null,
+        classId: classId,
         problemTitle: problem.title,
         problemId: problem.id,
         userId: user?.uid ?? null,
@@ -2066,26 +2090,21 @@ ${outputRule(lang)}`
   }
 
   function resolveStudentDocId(): string | null {
-    const fromState = studentId
-    const fromStudentDoc = studentDocId
-    const fromEmail = guessStudentIdFromEmail(auth.currentUser?.email ?? null)
+    // 1. useState の値をチェック（最も確実な最新の状態）
+    if (studentId) return studentId;
+    if (studentDocId) return studentDocId;
 
-    console.group('[RESOLVE] resolveStudentDocId')
-    console.log('studentId state =', fromState)
-    console.log('studentDocId state =', fromStudentDoc)
-    console.log('email =', auth.currentUser?.email ?? null)
-    console.log('studentId guessed from email =', fromEmail)
+    // 2. localStorage をチェック（リロードした瞬間に Auth より速く値を拾うため）
+    const savedId = typeof window !== 'undefined' ? localStorage.getItem('studentId') : null;
+    if (savedId) return savedId;
 
-    let result: string | null = null
-    if (fromState) result = fromState
-    else if (fromStudentDoc) result = fromStudentDoc
-    else if (fromEmail) result = fromEmail
-
-    console.log('=> resolved docId =', result)
-    if (!result) console.warn('[RESOLVE] 学籍IDを決定できませんでした')
-    console.groupEnd()
-
-    return result
+    // 3. Firebase Auth の現在の状態をチェック
+    const user = auth.currentUser;
+    if (user?.email) {
+      const fromEmail = guessStudentIdFromEmail(user.email);
+      if (fromEmail) return fromEmail;
+    }
+    return null;
   }
 
   async function safeGetDownloadURL(

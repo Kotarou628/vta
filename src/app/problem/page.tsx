@@ -1,23 +1,28 @@
-// src/app/problem/page.tsx
 'use client'
+export const dynamic = 'force-dynamic';
 
-import { useEffect, useState, useCallback, DragEvent, ChangeEvent } from 'react'
+import { useEffect, useState, useCallback, DragEvent, ChangeEvent, useRef } from 'react'
+import ReactMarkdown from 'react-markdown'
+import remarkMath from 'remark-math'
+import rehypeKatex from 'rehype-katex'
+import 'katex/dist/katex.min.css'
 import ProblemList from '@/components/ProblemList'
 import type { Problem as ProblemType, SolutionFile } from '@/types/problem'
+import remarkBreaks from 'remark-breaks'
+
 
 const DEBUG = true
 const dlog = (...args: any[]) => {
   if (DEBUG) console.log('[ProblemPage DEBUG]', ...args)
 }
 
-/** この画面用に Chat 表示フラグを足した型 */
+/** 画面表示用に型を拡張 */
 type ProblemWithVisible = ProblemType & {
   visibleInChat?: boolean | null
-  // バックエンド側が snake_case の場合にも備える
   visible_in_chat?: boolean | 0 | 1 | '0' | '1' | null
 }
 
-/** 拡張子から言語を推定 */
+/** 拡張子から言語を推定 (既存機能) */
 function inferLanguage(filename: string): string {
   const lower = filename.toLowerCase()
   if (lower.endsWith('.java')) return 'java'
@@ -26,14 +31,10 @@ function inferLanguage(filename: string): string {
   if (lower.endsWith('.py')) return 'python'
   if (lower.endsWith('.js')) return 'javascript'
   if (lower.endsWith('.ts')) return 'typescript'
-  if (lower.endsWith('.kt')) return 'kotlin'
-  if (lower.endsWith('.swift')) return 'swift'
-  if (lower.endsWith('.rb')) return 'ruby'
-  if (lower.endsWith('.go')) return 'go'
-  return '' // 不明は空
+  return ''
 }
 
-/** File[] -> SolutionFile[] に変換（テキスト読み込み） */
+/** File[] -> SolutionFile[] に変換 (既存機能) */
 async function filesToSolutionFiles(files: File[]): Promise<SolutionFile[]> {
   const tasks = files.map(async (f) => {
     const code = await f.text()
@@ -46,9 +47,9 @@ async function filesToSolutionFiles(files: File[]): Promise<SolutionFile[]> {
   return Promise.all(tasks)
 }
 
-/** DB から返ってきた値を確実に boolean にする */
+/** DBのフラグを正規化 */
 function normalizeVisibleFlag(raw: any): boolean {
-  if (raw === undefined || raw === null) return true // 未設定は ON 扱い
+  if (raw === undefined || raw === null) return true
   if (raw === true || raw === false) return raw
   if (raw === 1 || raw === '1') return true
   if (raw === 0 || raw === '0') return false
@@ -59,98 +60,99 @@ export default function ProblemPage() {
   const [problems, setProblems] = useState<ProblemWithVisible[]>([])
   const [expandedId, setExpandedId] = useState<string | null>(null)
 
-  // 既存：単一コード編集（互換維持）
+  // 編集用ステート
   const [editTitle, setEditTitle] = useState('')
   const [editDescription, setEditDescription] = useState('')
   const [editSolutionCode, setEditSolutionCode] = useState('')
+  const [editSolutionFiles, setEditSolutionFiles] = useState<SolutionFile[]>([{ filename: '', code: '' }])
 
-  // 新：複数ファイル編集
-  const emptyFile = (): SolutionFile => ({ filename: '', language: '', code: '' })
-  const [editSolutionFiles, setEditSolutionFiles] = useState<SolutionFile[]>([emptyFile()])
-
-  // 新規作成フォーム
+  // 新規登録用ステート
   const [newTitle, setNewTitle] = useState('')
   const [newDescription, setNewDescription] = useState('')
-  const [newSolutionCode, setNewSolutionCode] = useState('') // 互換
-  const [newFiles, setNewFiles] = useState<SolutionFile[]>([emptyFile()])
-
-  // ★ 新規問題の Chat 表示フラグ（デフォルト ON）
+  const [newSolutionCode, setNewSolutionCode] = useState('') 
+  const [newFiles, setNewFiles] = useState<SolutionFile[]>([{ filename: '', code: '' }])
   const [newVisibleInChat, setNewVisibleInChat] = useState<boolean>(true)
 
+  // スクロール同期・リサイズ用のRef
+  const editorRef = useRef<HTMLTextAreaElement>(null)
+  const previewRef = useRef<HTMLDivElement>(null)
+
+  // --- スクロール同期ロジック ---
+  const handleEditorScroll = () => {
+    if (!editorRef.current || !previewRef.current) return
+    const { scrollTop, scrollHeight, clientHeight } = editorRef.current
+    const scrollRatio = scrollTop / (scrollHeight - clientHeight)
+    previewRef.current.scrollTop = scrollRatio * (previewRef.current.scrollHeight - previewRef.current.clientHeight)
+  }
+
+  // --- 説明文への画像ドロップ (Base64) ---
+  const handleDescriptionImageDrop = async (e: DragEvent<HTMLTextAreaElement>) => {
+    e.preventDefault()
+    const files = Array.from(e.dataTransfer.files)
+    const imageFile = files.find(f => f.type.startsWith('image/'))
+    if (imageFile) {
+      const reader = new FileReader()
+      reader.onload = (event) => {
+        const base64 = event.target?.result
+        setNewDescription(prev => prev + `\n![image](${base64})\n`)
+      }
+      reader.readAsDataURL(imageFile)
+    }
+  }
+
+  // --- 解答ファイル管理ロジック (既存機能復活) ---
+  const addNewFile = () => {
+    setNewFiles(prev => [...prev, { filename: '', code: '' }])
+  }
+  const removeNewFile = (index: number) => {
+    setNewFiles(prev => {
+      const updated = prev.filter((_, i) => i !== index)
+      return updated.length > 0 ? updated : [{ filename: '', code: '' }]
+    })
+  }
+  const updateNewFile = (index: number, field: keyof SolutionFile, value: string) => {
+    setNewFiles(prev => prev.map((f, i) => i === index ? { ...f, [field]: value } : f))
+  }
+
+  // --- 解答ファイルのドラッグ&ドロップ (既存機能復活) ---
+  const handleDropSolutionFiles = useCallback(async (e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault()
+    e.stopPropagation()
+    const dtFiles = Array.from(e.dataTransfer.files || [])
+    if (dtFiles.length === 0) return
+    const sf = await filesToSolutionFiles(dtFiles)
+    setNewFiles((prev) => [...prev.filter((f) => f.filename || f.code), ...sf])
+  }, [])
+
+  const preventDefault = (e: DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+  }
+
+  // --- API連携ロジック ---
   const fetchProblems = async () => {
-    dlog('--- fetchProblems START ---')
     const res = await fetch('/api/problem')
     const data: any[] = await res.json()
-    dlog('/api/problem raw response:', data)
-
     const sorted = data.sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
-
-    const normalized: ProblemWithVisible[] = sorted.map((p, idx) => {
-      const rawCamel = (p as any).visibleInChat
-      const rawSnake = (p as any).visible_in_chat
-      const norm = normalizeVisibleFlag(rawCamel ?? rawSnake)
-      dlog('normalize item', idx, {
-        id: p.id,
-        title: p.title,
-        rawCamel,
-        rawSnake,
-        norm,
-      })
-      return {
-        ...p,
-        visibleInChat: norm,
-      }
-    })
-
-    dlog('setProblems(normalized):', normalized.map(p => ({
-      id: p.id,
-      title: p.title,
-      visibleInChat: p.visibleInChat,
-      visible_in_chat: (p as any).visible_in_chat,
-    })))
-
-    setProblems(normalized)
-    dlog('--- fetchProblems END ---')
+    setProblems(sorted.map(p => ({ ...p, visibleInChat: normalizeVisibleFlag(p.visibleInChat ?? p.visible_in_chat) })))
   }
 
   const handleSubmit = async () => {
-    // solution_files: 手動入力 + D&D
-    const filesPayload = newFiles.filter((f) => f.filename || f.code)
-
     const body = {
       title: newTitle,
       description: newDescription,
-      solution_files: filesPayload,
-      // 互換用：単一コードも別フィールドで送る（サーバ側で使うかは任意）
+      solution_files: newFiles.filter(f => f.filename || f.code),
       solution_code: newSolutionCode,
-      // ★ どちらの名前でもサーバが拾えるように両方送る
       visibleInChat: newVisibleInChat,
       visible_in_chat: newVisibleInChat,
     }
-    dlog('POST /api/problem body:', body)
-
-    const res = await fetch('/api/problem', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    })
-    dlog('POST /api/problem status:', res.status, 'ok:', res.ok)
-
-    setNewTitle('')
-    setNewDescription('')
-    setNewSolutionCode('')
-    setNewFiles([emptyFile()])
-    setNewVisibleInChat(true)
-
-    fetchProblems()
+    await fetch('/api/problem', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+    setNewTitle(''); setNewDescription(''); setNewFiles([{ filename: '', code: '' }]); fetchProblems()
   }
 
   const handleDelete = async (id: string) => {
-    const ok = confirm('この問題を削除しますか？')
-    if (!ok) return
-    dlog('DELETE /api/problem/', id)
-    const res = await fetch(`/api/problem/${id}`, { method: 'DELETE' })
-    dlog('DELETE status:', res.status, 'ok:', res.ok)
+    if (!confirm('削除しますか？')) return
+    await fetch(`/api/problem/${id}`, { method: 'DELETE' })
     fetchProblems()
   }
 
@@ -159,285 +161,142 @@ export default function ProblemPage() {
       setExpandedId(null)
     } else {
       setExpandedId(problem.id)
-      setEditTitle(problem.title ?? '')
-      setEditDescription(problem.description ?? '')
-      setEditSolutionCode(problem.solution_code ?? '')
-
-      const files =
-        problem.solution_files && problem.solution_files.length > 0
-          ? problem.solution_files
-          : problem.solution_code
-            ? [{ filename: '', language: '', code: problem.solution_code }]
-            : [emptyFile()]
-      setEditSolutionFiles(files)
+      setEditTitle(problem.title || '')
+      setEditDescription(problem.description || '')
+      setEditSolutionFiles(problem.solution_files?.length ? problem.solution_files : [{ filename: '', code: '' }])
     }
   }
 
   const handleUpdate = async (id: string) => {
-    const body = {
-      title: editTitle,
-      description: editDescription,
-      solution_files: editSolutionFiles.filter((f) => f.filename || f.code),
-      solution_code: editSolutionCode, // 互換
-      // visibleInChat はヘッダのチェックボックスで別更新するのでここでは触らない
-    }
-    dlog('PUT /api/problem (update core fields) id:', id, 'body:', body)
-
-    const res = await fetch(`/api/problem/${id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    })
-    dlog('PUT core status:', res.status, 'ok:', res.ok)
-
-    setExpandedId(null)
-    fetchProblems()
+    const body = { title: editTitle, description: editDescription, solution_files: editSolutionFiles.filter(f => f.filename) }
+    await fetch(`/api/problem/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+    setExpandedId(null); fetchProblems()
   }
 
-  // ★ Chat 表示フラグの切り替え
   const handleToggleVisible = async (id: string, next: boolean) => {
-    dlog('handleToggleVisible called:', { id, next })
-
-    const targetBefore = problems.find((p) => p.id === id)
-    dlog('targetBefore:', targetBefore)
-
-    // 画面側を先に更新（楽観的更新）
-    setProblems((prev) => {
-      const updated = prev.map((p) => (p.id === id ? { ...p, visibleInChat: next } : p))
-      dlog('optimistic problems state after toggle:', updated.map(p => ({
-        id: p.id,
-        title: p.title,
-        visibleInChat: p.visibleInChat,
-        visible_in_chat: (p as any).visible_in_chat,
-      })))
-      return updated
-    })
-
-    const body = {
-      title: targetBefore?.title ?? '',
-      description: targetBefore?.description ?? '',
-      solution_files: targetBefore?.solution_files ?? [],
-      solution_code: targetBefore?.solution_code ?? '',
-      // ★ どちらの名前でもサーバが拾えるように両方送る
-      visibleInChat: next,
-      visible_in_chat: next,
-    }
-    dlog('PUT /api/problem (toggle visible) id:', id, 'body:', body)
-
-    try {
-      const res = await fetch(`/api/problem/${id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      })
-      dlog('PUT toggle status:', res.status, 'ok:', res.ok)
-
-      // 念のため再取得（サーバ側の値を反映）
-      await fetchProblems()
-    } catch (e) {
-      console.error('問題の表示フラグ更新に失敗しました', e)
-    }
+    const target = problems.find(p => p.id === id)
+    const body = { ...target, visibleInChat: next, visible_in_chat: next }
+    await fetch(`/api/problem/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+    fetchProblems()
   }
 
   const handleReorder = async (newList: ProblemType[]) => {
-    dlog('handleReorder newList:', newList.map(p => ({
-      id: p.id,
-      title: p.title,
-    })))
-
     setProblems(newList as ProblemWithVisible[])
-    const body = {
-      problems: newList.map((p, index) => ({ id: p.id, order: index })),
-    }
-    dlog('PUT /api/problem/reorder body:', body)
-
-    const res = await fetch('/api/problem/reorder', {
+    await fetch('/api/problem/reorder', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ problems: newList.map((p, index) => ({ id: p.id, order: index })) }),
     })
-    dlog('PUT /api/problem/reorder status:', res.status, 'ok:', res.ok)
-
-    fetchProblems()
   }
 
-  useEffect(() => {
-    fetchProblems()
-  }, [])
-
-  // problems が変わるたびに状態をダンプ
-  useEffect(() => {
-    dlog('++ problems state changed ++')
-    problems.forEach((p, idx) => {
-      dlog(`  [${idx}]`, {
-        id: p.id,
-        title: p.title,
-        visibleInChat: p.visibleInChat,
-        visible_in_chat: (p as any).visible_in_chat,
-      })
-    })
-  }, [problems])
-
-  // 新規フォーム：手動入力ユーティリティ
-  const updateNewFile = (i: number, field: keyof SolutionFile, value: string) => {
-    const list = [...newFiles]
-    list[i] = { ...list[i], [field]: value }
-    setNewFiles(list)
-  }
-  const addNewFile = () => setNewFiles((prev) => [...prev, emptyFile()])
-  const removeNewFile = (i: number) => {
-    const list = [...newFiles]
-    list.splice(i, 1)
-    setNewFiles(list.length ? list : [emptyFile()])
-  }
-
-  // === ドラッグ＆ドロップ（新規） ===
-  const handleDropNew = useCallback(async (e: DragEvent<HTMLDivElement>) => {
-    e.preventDefault()
-    const dtFiles = Array.from(e.dataTransfer.files || [])
-    if (dtFiles.length === 0) return
-    const sf = await filesToSolutionFiles(dtFiles)
-    setNewFiles((prev) => {
-      const base = prev.filter((f) => f.filename || f.code) // 空行除去
-      return [...base, ...sf]
-    })
-  }, [])
-
-  const handleSelectNew = async (e: ChangeEvent<HTMLInputElement>) => {
-    const fileList = e.target.files
-    if (!fileList || fileList.length === 0) return
-    const sf = await filesToSolutionFiles(Array.from(fileList))
-    setNewFiles((prev) => {
-      const base = prev.filter((f) => f.filename || f.code)
-      return [...base, ...sf]
-    })
-    e.target.value = '' // 同じファイルでも再選択可能に
-  }
-
-  const preventDefault = (e: DragEvent) => {
-    e.preventDefault()
-    e.stopPropagation()
-  }
+  useEffect(() => { fetchProblems() }, [])
 
   return (
-    <main className="p-4 max-w-2xl mx-auto">
-      <h1 className="text-2xl font-bold mb-4">問題の管理</h1>
+    <main className="p-4 max-w-6xl mx-auto">
+      <h1 className="text-3xl font-bold mb-6 text-gray-800">問題の管理</h1>
 
-      {/* 新規登録フォーム */}
-      <div className="space-y-2 mb-6">
-        <input
-          className="w-full border p-2"
-          placeholder="タイトル"
-          value={newTitle}
-          onChange={(e) => setNewTitle(e.target.value)}
-        />
-        <textarea
-          className="w-full border p-2"
-          placeholder="説明"
-          value={newDescription}
-          onChange={(e) => setNewDescription(e.target.value)}
+      <div className="space-y-6 mb-10 bg-white border shadow-xl rounded-xl p-6">
+        <h2 className="text-xl font-bold text-blue-700 border-b pb-2">新規課題登録</h2>
+        
+        <input 
+          className="w-full border-2 p-3 rounded-lg outline-none focus:border-blue-500" 
+          placeholder="タイトル" 
+          value={newTitle} 
+          onChange={e => setNewTitle(e.target.value)} 
         />
 
-        {/* ★ ドラッグ＆ドロップでファイル追加（新規） */}
-        <div
-          className="border-2 border-dashed rounded p-4 text-center text-sm text-gray-600 bg-gray-50"
-          onDragOver={preventDefault}
-          onDragEnter={preventDefault}
-          onDrop={handleDropNew}
-        >
-          ここに模範解答ファイルをドラッグ＆ドロップ（複数可）
-          <div className="mt-2">
-            <label className="cursor-pointer underline">
-              クリックしてファイルを選択
-              <input
-                type="file"
-                multiple
-                className="hidden"
-                accept=".java,.c,.cpp,.cc,.cxx,.py,.js,.ts,.kt,.swift,.rb,.go,.txt"
-                onChange={handleSelectNew}
-              />
-            </label>
+        {/* --- Markdownエディタ + プレビュー --- */}
+        <div className="flex flex-col md:flex-row gap-4">
+          <div className="flex-1 space-y-1">
+            <label className="text-xs font-bold text-gray-400">説明文 (Markdown / 画像ドロップ対応)</label>
+            <textarea
+              ref={editorRef}
+              onScroll={handleEditorScroll}
+              onDrop={handleDescriptionImageDrop}
+              className="w-full border-2 p-4 rounded-lg font-mono text-sm min-h-[400px] resize-y outline-none focus:border-blue-500 bg-white shadow-inner"
+              placeholder="ここに問題文を記述... (画像をここにドロップすると挿入されます)"
+              value={newDescription}
+              onChange={e => setNewDescription(e.target.value)}
+            />
+          </div>
+          <div className="flex-1 space-y-1">
+            <label className="text-xs font-bold text-gray-400">ライブプレビュー (スクロール同期)</label>
+            <div 
+              ref={previewRef} 
+              className="w-full border-2 p-5 rounded-lg h-[400px] md:h-full overflow-auto bg-gray-50 prose prose-blue max-w-none shadow-inner whitespace-pre-wrap font-mono"
+              style={{ lineHeight: '1.2' }}
+            >
+              <ReactMarkdown 
+                remarkPlugins={[remarkMath, remarkBreaks]} // ★ 改行プラグインを適用
+                rehypePlugins={[rehypeKatex]}
+                components={{
+                  // ★ 段落(p)でスペースと改行をそのまま表示するように設定
+                  p: ({ children }) => <p style={{ whiteSpace: 'pre-wrap', margin: '0 0 1em 0' }}>{children}</p>,
+                  // ★ コードブロック内でもインデントを保持
+                  code: ({ children }) => <code style={{ whiteSpace: 'pre-wrap', fontFamily: 'inherit' }}>{children}</code>,
+                  pre: ({ children }) => <pre style={{ whiteSpace: 'pre-wrap', backgroundColor: '#f3f4f6', padding: '1rem', borderRadius: '0.5rem' }}>{children}</pre>
+                }}
+              >
+                {newDescription || '*プレビューがここに表示されます*'}
+              </ReactMarkdown>
+            </div>
           </div>
         </div>
 
-        {/* 複数ファイル入力ゾーン（手動編集も併用可能） */}
-        <div className="space-y-3 border rounded p-3">
-          <div className="font-semibold">解答ファイル</div>
-          {newFiles.map((f, i) => (
-            <div key={i} className="border rounded p-2 space-y-2">
-              <div className="flex gap-2">
-                <input
-                  className="flex-1 border p-2"
-                  placeholder="ファイル名（例: Main.java / main.c）"
-                  value={f.filename}
-                  onChange={(e) => updateNewFile(i, 'filename', e.target.value)}
-                />
-                <select
-                  className="w-40 border p-2"
-                  value={f.language ?? ''}
-                  onChange={(e) => updateNewFile(i, 'language', e.target.value)}
-                >
-                  <option value="">言語(任意)</option>
-                  <option value="c">C</option>
-                  <option value="cpp">C++</option>
-                  <option value="java">Java</option>
-                  <option value="python">Python</option>
-                  <option value="javascript">JavaScript</option>
-                  <option value="typescript">TypeScript</option>
-                </select>
-                <button
-                  type="button"
-                  className="border px-2 rounded"
-                  onClick={() => removeNewFile(i)}
-                >
-                  削除
-                </button>
-              </div>
-              <textarea
-                className="w-full border p-2"
-                rows={8}
-                placeholder="このファイルの解答コード"
-                value={f.code}
-                onChange={(e) => updateNewFile(i, 'code', e.target.value)}
-              />
-            </div>
-          ))}
-          <button type="button" className="border px-3 py-1 rounded" onClick={addNewFile}>
-            ＋ ファイルを追加
-          </button>
+        {/* --- 解答ファイル ドラッグ&ドロップエリア (既存機能) --- */}
+        <div
+          className="border-2 border-dashed border-gray-300 rounded-xl p-8 text-center text-sm text-gray-500 bg-gray-50 hover:bg-blue-50 hover:border-blue-400 transition-all cursor-pointer"
+          onDragOver={preventDefault}
+          onDragEnter={preventDefault}
+          onDrop={handleDropSolutionFiles}
+        >
+          <div className="font-bold text-lg mb-2">ここに模範解答ファイルをドラッグ＆ドロップ</div>
+          <p className="mb-4 text-gray-400">（複数ファイルを一度に読み込めます）</p>
+          <label className="bg-white border px-4 py-2 rounded shadow-sm cursor-pointer hover:bg-gray-50">
+            ファイルを選択
+            <input 
+              type="file" 
+              multiple 
+              className="hidden" 
+              accept=".java,.c,.cpp,.py,.js,.ts" 
+              onChange={async (e) => {
+                const sf = await filesToSolutionFiles(Array.from(e.target.files || []))
+                setNewFiles(prev => [...prev.filter(f => f.filename), ...sf])
+              }} 
+            />
+          </label>
         </div>
 
-        {/* 互換：従来の単一入力（送信は solution_files / solution_code を併用） */}
-        <textarea
-          className="w-full border p-2"
-          placeholder="（互換）解答コード（単一ファイル）"
-          value={newSolutionCode}
-          onChange={(e) => setNewSolutionCode(e.target.value)}
-        />
+        {/* 解答ファイル個別編集リスト */}
+        <div className="space-y-3 bg-gray-50 p-4 rounded-lg border">
+          <div className="flex justify-between items-center font-bold text-sm text-gray-600">
+            <span>登録解答ファイル一覧</span>
+            <button type="button" onClick={addNewFile} className="text-blue-600 hover:underline">＋ 手動で追加</button>
+          </div>
+          {newFiles.map((f, i) => (
+            <div key={i} className="bg-white border p-3 rounded-lg shadow-sm space-y-2">
+              <div className="flex gap-2">
+                <input className="flex-1 border p-2 text-sm rounded focus:border-blue-300 outline-none" placeholder="ファイル名 (例: CubicRoot.java)" value={f.filename} onChange={e => updateNewFile(i, 'filename', e.target.value)} />
+                <button type="button" onClick={() => removeNewFile(i)} className="text-red-500 font-bold px-3 hover:bg-red-50 rounded">✕</button>
+              </div>
+              <textarea className="w-full border p-2 text-xs font-mono rounded bg-gray-50 outline-none focus:bg-white" rows={6} placeholder="ソースコードを入力..." value={f.code} onChange={e => updateNewFile(i, 'code', e.target.value)} />
+            </div>
+          ))}
+        </div>
 
-        {/* ★ Chat 表示フラグ */}
-        <label className="inline-flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            checked={newVisibleInChat}
-            onChange={(e) => setNewVisibleInChat(e.target.checked)}
-          />
-          <span>Chat画面の問題一覧に表示する</span>
-        </label>
-
-        <button
-          onClick={handleSubmit}
-          className="bg-blue-600 text-white px-4 py-2 rounded"
-        >
-          問題を追加
-        </button>
+        <div className="flex items-center justify-between border-t pt-6">
+          <label className="flex items-center gap-2 cursor-pointer text-sm font-semibold text-gray-600">
+            <input type="checkbox" className="w-5 h-5" checked={newVisibleInChat} onChange={e => setNewVisibleInChat(e.target.checked)} />
+            Chat画面の問題一覧に表示する
+          </label>
+          <button onClick={handleSubmit} className="bg-blue-600 text-white px-12 py-3 rounded-full font-bold shadow-lg hover:bg-blue-700 transition-all active:scale-95">
+            問題を新規登録
+          </button>
+        </div>
       </div>
 
-      <hr className="my-6" />
-
-      {/* 並べ替え可能なリスト */}
       <ProblemList
-        problems={problems ?? []}
+        problems={problems}
         onReorder={handleReorder}
         expandedId={expandedId}
         toggleExpand={toggleExpand}
@@ -447,11 +306,10 @@ export default function ProblemPage() {
         setEditDescription={setEditDescription}
         editSolutionCode={editSolutionCode}
         setEditSolutionCode={setEditSolutionCode}
-        editSolutionFiles={editSolutionFiles ?? []}
+        editSolutionFiles={editSolutionFiles}
         setEditSolutionFiles={setEditSolutionFiles}
         handleUpdate={handleUpdate}
         handleDelete={handleDelete}
-        // ★ Chat 表示フラグ切り替え
         onToggleVisible={handleToggleVisible}
       />
     </main>

@@ -1,4 +1,5 @@
 // src/app/api/problem/route.ts
+export const dynamic = 'force-dynamic';
 import { db } from '@/lib/firebase-admin'
 import { NextResponse } from 'next/server'
 import admin from 'firebase-admin' // ★ 互換のため残しておく（未使用でもOK）

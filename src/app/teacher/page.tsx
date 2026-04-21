@@ -1,5 +1,6 @@
 // src/app/teacher/page.tsx
 'use client'
+export const dynamic = 'force-dynamic';
 
 import React, { useEffect, useMemo, useState, useRef } from 'react'
 import {
@@ -234,6 +235,16 @@ const seatBgClassByMinutes = (minutes: number | null): string => {
   return 'bg-red-200 dark:bg-red-900/30'
 }
 
+const getDayRangeTimestamps = (ymd: string) => {
+  const [y, m, d] = ymd.split('-').map(Number)
+  const start = new Date(y, m - 1, d, 0, 0, 0, 0)
+  const end = new Date(y, m - 1, d, 23, 59, 59, 999)
+  return {
+    start: Timestamp.fromDate(start),
+    end: Timestamp.fromDate(end)
+  }
+}
+
 const seatBlocks = [
   {
     id: 'left',
@@ -344,10 +355,14 @@ export default function TeacherPage() {
 
   useEffect(() => {
     setChatLoading(true)
+    const { start, end } = getDayRangeTimestamps(logDateYMD)
+
+    // クエリ自体で日付を絞り込む（limitは削除）
     const qBase = query(
       collection(db, 'chatLogs'),
-      orderBy('createdAt', 'desc'),
-      limit(limitCount)
+      where('createdAt', '>=', start),
+      where('createdAt', '<=', end),
+      orderBy('createdAt', 'desc')
     )
 
     const unsub = onSnapshot(
@@ -384,14 +399,17 @@ export default function TeacherPage() {
     )
 
     return () => unsub()
-  }, [limitCount])
+  }, [logDateYMD]) // 依存配列から limitCount を除外し、日付変更をトリガーにする
 
   useEffect(() => {
     setSubLoading(true)
+    const { start, end } = getDayRangeTimestamps(logDateYMD)
+
     const qBase = query(
       collection(db, 'submissions'),
-      orderBy('submittedAt', 'desc'),
-      limit(limitCount)
+      where('submittedAt', '>=', start),
+      where('submittedAt', '<=', end),
+      orderBy('submittedAt', 'desc')
     )
 
     const unsub = onSnapshot(
@@ -426,7 +444,7 @@ export default function TeacherPage() {
     )
 
     return () => unsub()
-  }, [limitCount])
+  }, [logDateYMD])
 
   useEffect(() => {
     setStudentsLoading(true)
@@ -531,21 +549,23 @@ export default function TeacherPage() {
 
   const filteredChatLogs = useMemo(() => {
     return chatLogs.filter((log) => {
-      // 担当クラスが未選択なら何も出さない
       if (!assignedClass) return false
-      // フィルター配列が空の場合も表示しない
       if (logClassFilters.length === 0) return false
 
-      if (!isSameDay(log.createdAt, selectedDayMs)) return false
+      // クエリですでに日付は絞られているので、日付判定は不要（削除済み）
       if (problemFilter !== 'all' && log.problemId !== problemFilter) return false
       
+      // クラスIDの取得（データにある classId 優先、なければ座席からの逆引き）
       const logClassId = log.classId || (log.seatNumber ? seatToClassMap.get(log.seatNumber.toUpperCase()) : null)
       
-      // ★修正：複数選択ロジック
-      // 「all」が含まれておらず、かつ、ログのクラスが選択リストに含まれていない場合は除外
-      if (!logClassFilters.includes('all')) {
+      // --- 【修正ここから】 ---
+      // 「全クラス表示」がONなら全件出す
+      if (logClassFilters.includes('all')) {
+        // 全表示
+      } else {
+        // 保存されたclassId、または逆引きしたIDが選択中のフィルタに含まれているか
         if (!logClassId || !logClassFilters.includes(logClassId)) {
-          return false
+          return false;
         }
       }
 
@@ -565,7 +585,6 @@ export default function TeacherPage() {
   const filteredSubmissions = useMemo(() => {
     return submissions.filter((s) => {
       if (!assignedClass) return false
-      if (!isSameDay(s.submittedAt, selectedDayMs)) return false
       if (problemFilter !== 'all' && s.problemId !== problemFilter) return false
       const subClassId = s.classId || (s.seatNumber ? seatToClassMap.get(s.seatNumber.toUpperCase()) : null)
       if (!logClassFilters.includes('all')) {

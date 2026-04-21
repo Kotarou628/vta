@@ -1,4 +1,5 @@
 // src/app/api/problem/[id]/route.ts
+export const dynamic = 'force-dynamic';
 import { db } from '@/lib/firebase-admin'
 import { NextRequest, NextResponse } from 'next/server'
 
