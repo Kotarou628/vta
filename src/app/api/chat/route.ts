@@ -18,7 +18,7 @@ export async function POST(req: NextRequest) {
       Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
-      model: 'gpt-4o-mini',
+      model: 'gpt-5.4-nano',
       stream: true,
       messages: [
         { role: 'system', content: 'あなたは学習者に思考を促す質問を投げかけるプロのプログラミング教員です。' },
