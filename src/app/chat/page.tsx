@@ -963,6 +963,7 @@ export default function ChatPage() {
   const [seatNumber, setSeatNumber] = useState<string | null>(null)
   const [studentId, setStudentId] = useState<string | null>(null)
   const [studentDocId, setStudentDocId] = useState<string | null>(null)
+  const [classId, setClassId] = useState<string | null>(null)
   const [taRequested, setTaRequested] = useState(false)
 
   // ===== theme =====
@@ -1029,6 +1030,10 @@ export default function ChatPage() {
           setSeatNumber(fsSeat)
           console.log('=> seatNumber を localStorage / state に保存しました')
         }
+
+        const fsClass = data?.classId ?? data?.class ?? localStorage.getItem('classId') ?? null
+        setClassId(fsClass)
+        if (fsClass) localStorage.setItem('classId', fsClass)
 
         let sid: string | null = null
         if (data?.studentId) {
@@ -2288,6 +2293,7 @@ ${filesForPrompt}
         userId: uid,
         userEmail: auth.currentUser?.email ?? null,
         seatNumber: normalizeSeatNumber(getSeatNumberFromStorage() ?? seatNumber ?? null),
+        classId: classId,
         submittedAt: serverTimestamp(),
         durationSec,
         files: uploaded,
