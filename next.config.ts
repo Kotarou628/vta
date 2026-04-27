@@ -5,7 +5,7 @@ const nextConfig: NextConfig = {
   // Next.js 16の開発サーバー(Turbopack)の要求に合わせてここに配置します。
   // 型定義が追いついていないため、@ts-ignore でエラーを回避します。
   // @ts-ignore
-  allowedDevOrigins: ['192.168.0.14'],
+  allowedDevOrigins: ['192.168.0.8'],
 
   /* --- 2. ビルド設定 --- */
   // eslint ブロックは Next.js 16 で廃止されたため削除しました。

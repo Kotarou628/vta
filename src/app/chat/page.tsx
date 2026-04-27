@@ -15,6 +15,7 @@ import {
   doc,
   getDoc,
   setDoc,              // ★ 追加
+  increment,
 } from 'firebase/firestore'
 import { onAuthStateChanged } from 'firebase/auth'
 import { db, auth } from '@/lib/firebase'
@@ -1229,7 +1230,7 @@ export default function ChatPage() {
     })
   }
 
-  const handleSelectProblem = (p: Problem) => {
+  const handleSelectProblem = async (p: Problem) => { // async化
     if (problem) pauseTimer(problem.id)
 
     setProblem(p)
@@ -1241,6 +1242,27 @@ export default function ChatPage() {
 
     setPendingNudges([])
     setTaRequested(false)
+
+    // ★ 追加：問題を切り替えた際、その問題の過去の質問回数を表示用フィールドに同期する
+    const docId = resolveStudentDocId();
+    if (docId) {
+      const studentRef = doc(db, 'students', docId);
+      try {
+        const snap = await getDoc(studentRef);
+        const data = snap.data();
+        // その問題で過去に質問した回数（無ければ0）を取得
+        const pastCount = data?.problemCounts?.[p.id] || 0;
+        
+        await setDoc(studentRef, {
+          currentQuestionCount: pastCount, // 過去の回数で表示をリセット/上書き
+          currentProblemId: p.id,
+          currentProblemTitle: p.title,
+          updatedAt: serverTimestamp(),
+        }, { merge: true });
+      } catch (e) {
+        console.warn('[Sync failed]', e);
+      }
+    }
 
     updateStudentTimerForProblem(p, { resetTimer: true })
     updateStudentTaRequest(false)
@@ -1762,6 +1784,18 @@ export default function ChatPage() {
       }
     }
 
+    const docId = resolveStudentDocId();
+    if (docId) {
+      const studentRef = doc(db, 'students', docId);
+      setDoc(studentRef, {
+        problemCounts: {
+          [problem.id]: increment(1) // Map形式で問題ごとの回数を加算
+        },
+        currentQuestionCount: increment(1), // 教員画面の表示用
+        updatedAt: serverTimestamp(),
+      }, { merge: true }).catch(e => console.warn('[Count update failed]', e));
+    }
+
     const userMessage: Message = {
       role: 'user',
       content: userContent,
@@ -2089,6 +2123,15 @@ export default function ChatPage() {
       const ms = accum + (runningAt ? Date.now() - runningAt : 0)
       const durationSec = Math.max(0, Math.floor(ms / 1000))
 
+      let questionCount = 1;
+      const studentDocId = resolveStudentDocId();
+      if (studentDocId) {
+        const sSnap = await getDoc(doc(db, 'students', studentDocId));
+        if (sSnap.exists()) {
+          questionCount = sSnap.data().currentQuestionCount ?? 1;
+        }
+      }
+
       await addDoc(collection(db, 'chatLogs'), {
         userMessage,
         assistantMessage,
@@ -2098,6 +2141,7 @@ export default function ChatPage() {
         classId: classId,
         problemTitle: problem.title,
         problemId: problem.id,
+        questionCount, // ★ この時点での質問回数を保存
         userId: user?.uid ?? null,
         userEmail: user?.email ?? null,
         createdAt: serverTimestamp(),

@@ -41,6 +41,7 @@ type ChatLog = {
   answerMode?: 'normal' | 'grading'
   questionType?: QuestionType
   classId?: string | null
+  questionCount?: number
 }
 
 type Submission = {
@@ -73,6 +74,7 @@ type StudentSeat = {
   timerRunning?: boolean
   updatedAt?: Timestamp | null
   classId?: string | null
+  currentQuestionCount?: number
 }
 
 const QUESTION_TYPE_LABEL: Record<QuestionType, string> = {
@@ -387,6 +389,7 @@ export default function TeacherPage() {
             answerMode: d.answerMode,
             questionType: normalizeQuestionType(d.questionType),
             classId: d.classId ?? null,
+            questionCount: d.questionCount ?? null,
           })
         })
         setChatLogs(list)
@@ -477,6 +480,7 @@ export default function TeacherPage() {
             timerRunning: !!d.timerRunning,
             updatedAt,
             classId: d.classId ?? d.class ?? null,
+            currentQuestionCount: d.currentQuestionCount ?? 0,
           })
         })
         setStudents(list)
@@ -1095,6 +1099,14 @@ export default function TeacherPage() {
                                     >
                                       <div className="text-[11px] font-semibold flex items-center gap-1 text-gray-900 dark:text-gray-100">
                                         <span>{seatId}</span>
+                                        
+                                        {/* 「Q:」を削除し、サイズを text-[11px]（座席番号と同じサイズ）に拡大 */}
+                                        {isTodaySeat && (seatInfo?.currentQuestionCount ?? 0) > 0 && (
+                                          <span className="ml-1 px-1.5 rounded bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300 text-[10px] font-extrabold shadow-sm">
+                                            {seatInfo?.currentQuestionCount}
+                                          </span>
+                                        )}
+
                                         {seatInfo?.taRequested && isTodaySeat && (
                                           <span>👋</span>
                                         )}
@@ -1247,6 +1259,11 @@ export default function TeacherPage() {
                             {log.seatNumber && (
                               <span className="px-1.5 py-0.5 rounded border bg-gray-50 dark:bg-gray-900 border-gray-200 dark:border-gray-800 text-gray-900 dark:text-gray-100">
                                 座席: {log.seatNumber}
+                              </span>
+                            )}
+                            {log.questionCount && (
+                              <span className="px-1.5 py-0.5 rounded border bg-blue-100 dark:bg-blue-900/60 border-blue-300 dark:border-blue-700 text-blue-800 dark:text-blue-200 font-bold">
+                                {log.questionCount}回目
                               </span>
                             )}
                             {cId && (
