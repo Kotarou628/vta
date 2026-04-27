@@ -14,12 +14,19 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  // titleをオブジェクト形式にすることで、各ページで名前を補完できるようになります
-  title: {
-    template: "%s | Virtual TA", // 各ページで設定したタイトルが %s に入ります
-    default: "Virtual TA",       // 個別に設定がない場合のデフォルト名
+  // ブラウザのタブ名
+  title: "Virtual_TA",
+  description: "AIによる学習支援システム",
+  
+  // URLプレビュー用の設定（ここが重要です）
+  openGraph: {
+    title: "Virtual_TA",
+    description: "AIによる学習支援システム",
+    url: "https://vta-seven.vercel.app",
+    siteName: "Virtual_TA",
+    locale: "ja_JP",
+    type: "website",
   },
-  description: "AIアシスタントによる学習支援システム",
 };
 
 export default function RootLayout({
