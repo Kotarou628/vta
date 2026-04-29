@@ -911,6 +911,33 @@ export default function ChatPage() {
   const [problems, setProblems] = useState<Problem[]>([])
   const [problem, setProblem] = useState<Problem | null>(null)
   const visibleProblems = useMemo<Problem[]>(() => problems, [problems])
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true)
+
+  const [inputHeight, setInputHeight] = useState(110);
+  const isResizing = useRef(false);
+
+  const startResizing = (e: React.MouseEvent) => {
+    isResizing.current = true;
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', stopResizing);
+    document.body.style.cursor = 'row-resize';
+  };
+
+  const handleMouseMove = (e: MouseEvent) => {
+    if (!isResizing.current) return;
+    const newHeight = window.innerHeight - e.clientY;
+    // 最小150px、最大は画面の80%までに制限
+    if (newHeight > 150 && newHeight < window.innerHeight * 0.8) {
+      setInputHeight(newHeight);
+    }
+  };
+
+  const stopResizing = () => {
+    isResizing.current = false;
+    document.removeEventListener('mousemove', handleMouseMove);
+    document.removeEventListener('mouseup', stopResizing);
+    document.body.style.cursor = 'default';
+  };
 
   // 通常 / 採点モード
   const [gradingMode, setGradingMode] = useState(false)
@@ -919,6 +946,16 @@ export default function ChatPage() {
   const [questionMode, setQuestionMode] = useState<QuestionMode>('none')
   const [stepIndex, setStepIndex] = useState(0)
   const stepTextareaRef = useRef<HTMLTextAreaElement | null>(null)
+
+  useEffect(() => {
+    if (questionMode !== 'none') {
+      // 質問モードが選ばれたら、入力しやすい高さに広げる
+      setInputHeight(450); 
+    } else {
+      // 閉じている時はボタンの高さに合わせる
+      setInputHeight(110);
+    }
+  }, [questionMode]);
 
   // 課題の読み解き・進め方（4項目）
   const [taskWhere, setTaskWhere] = useState('')
@@ -2376,40 +2413,75 @@ ${filesForPrompt}
     <>
       <main className="flex h-screen bg-white text-gray-900 dark:bg-gray-950 dark:text-gray-100">
         {/* 左：問題リスト */}
-        <div className="w-1/3 border-r p-4 overflow-y-auto
-                        bg-gray-50 text-gray-900 border-gray-200
-                        dark:bg-gray-900 dark:text-gray-100 dark:border-gray-800">
-          <h2 className="font-bold mb-2">問題を選択</h2>
-          {visibleProblems.map((p) => (
-            <button
-              key={p.id}
-              onClick={() => handleSelectProblem(p)}
-              className={`block w-full text-left p-2 mb-2 rounded border
-                ${problem?.id === p.id
-                  ? 'bg-blue-100 border-blue-200 dark:bg-blue-900/35 dark:border-blue-800'
-                  : 'bg-transparent border-transparent hover:bg-blue-50 dark:hover:bg-gray-800'
-                }`}
-            >
-              {p.title}
-            </button>
-          ))}
-          <div className="mt-4 border-t pt-3 border-gray-200 dark:border-gray-800">
-            <h3 className="font-semibold text-sm text-gray-700 dark:text-gray-200 mb-2">選択中の問題</h3>
-            {problem ? (
-              <div className="bg-white border rounded p-3 border-gray-200
-                              dark:bg-gray-950 dark:border-gray-800">
-                <div className="text-sm font-bold mb-2">{problem.title}</div>
-                {renderHighlightedDescription(problem.description || '（問題文が未設定です）')}
-              </div>
-            ) : (
-              <div className="text-xs text-gray-500 dark:text-gray-400">左のリストから問題を選んでください。</div>
-            )}
+        <div className={`
+          /* アニメーションの設定 */
+          transition-all duration-300 ease-in-out overflow-y-auto
+          /* 共通の背景・ボーダー設定 */
+          bg-gray-50 text-gray-900 border-gray-200 border-r
+          dark:bg-gray-900 dark:text-gray-100 dark:border-gray-800
+          /* ★ 開閉による変化：幅、パディング、透明度 ★ */
+          ${isSidebarOpen 
+            ? 'w-1/3 p-4 opacity-100' 
+            : 'w-0 p-0 opacity-0 border-none pointer-events-none'}
+        `}>
+          
+          {/* ★ 重要：閉じている最中に中身のレイアウトが崩れないよう、
+              中身を固定幅（min-w）の div で包みます */}
+          <div className={isSidebarOpen ? 'min-w-[250px]' : 'hidden'}>
+            <h2 className="font-bold mb-2">問題を選択</h2>
+            {visibleProblems.map((p) => (
+              <button
+                key={p.id}
+                onClick={() => handleSelectProblem(p)}
+                className={`block w-full text-left p-2 mb-2 rounded border
+                  ${problem?.id === p.id
+                    ? 'bg-blue-100 border-blue-200 dark:bg-blue-900/35 dark:border-blue-800'
+                    : 'bg-transparent border-transparent hover:bg-blue-50 dark:hover:bg-gray-800'
+                  }`}
+              >
+                {p.title}
+              </button>
+            ))}
+            
+            <div className="mt-4 border-t pt-3 border-gray-200 dark:border-gray-800">
+              <h3 className="font-semibold text-sm text-gray-700 dark:text-gray-200 mb-2">
+                選択中の問題
+              </h3>
+              {problem ? (
+                <div className="bg-white border rounded p-3 border-gray-200 dark:bg-gray-950 dark:border-gray-800">
+                  <div className="text-sm font-bold mb-2">{problem.title}</div>
+                  {renderHighlightedDescription(problem.description || '（問題文が未設定です）')}
+                </div>
+              ) : (
+                <div className="text-xs text-gray-500 dark:text-gray-400">
+                  左のリストから問題を選んでください。
+                </div>
+              )}
+            </div>
           </div>
         </div>
 
         {/* 右：チャット */}
-        <div className="flex-1 p-4 flex flex-col bg-white dark:bg-gray-950">
-          <div className="flex items-center justify-between mb-2">
+        <div className="flex-1 p-4 flex flex-col bg-white dark:bg-gray-950 relative overflow-hidden">
+
+          {/* ★ 追加箇所：サイドバー開閉ボタン ★ */}
+          <button
+            onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+            className={`absolute top-1/2 -translate-y-1/2 left-0 z-20 
+                        w-5 h-16 bg-gray-200 dark:bg-gray-800 
+                        border border-l-0 border-gray-300 dark:border-gray-700
+                        rounded-r-md flex items-center justify-center
+                        hover:bg-gray-300 dark:hover:bg-gray-700 transition-all group shadow-sm`}
+            title={isSidebarOpen ? "問題を隠す" : "問題を表示"}
+          >
+            <div className={`transition-transform duration-300 ${isSidebarOpen ? "" : "rotate-180"}`}>
+              {/* 小さな「<」アイコン */}
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M15 18l-6-6 6-6" />
+              </svg>
+            </div>
+          </button>
+          <div className={`flex items-center justify-between mb-2 transition-all ${isSidebarOpen ? '' : 'pl-4'}`}>
             <h1 className="text-xl font-bold">{problem?.title || '問題未選択'}</h1>
             <div className="flex items-center gap-3">
               {/* theme toggle */}
@@ -2584,439 +2656,406 @@ ${filesForPrompt}
             })}
             <div ref={bottomRef} />
           </div>
-
-          {/* 採点モードUI */}
-          {problem && !waitingFeedback && gradingMode && (
+          {/* ★追加：リサイズ可能なラッパー要素 ★ */}
+          <div 
+            style={{ height: `${inputHeight}px` }} 
+            className="flex flex-col border-t border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-950 relative shrink-0"
+          >
+            {/* ★リサイズハンドル（境界線のツマミ） ★ */}
             <div
-              className="mb-3 border rounded p-3 bg-slate-50 space-y-3
-                        dark:bg-gray-900 dark:border-gray-800"
-            >
-              <div className="flex items-center justify-between gap-2">
-                <div className="text-sm font-semibold">採点モード：提出を入力</div>
-                <div className="text-xs text-gray-600 dark:text-gray-300">
-                  {gradingSaving ? '保存中…' : loading ? '採点中…' : ''}
+              onMouseDown={startResizing}
+              className="absolute -top-1 left-0 w-full h-2 cursor-row-resize hover:bg-blue-500/40 z-30 transition-colors"
+              title="ドラッグして入力欄の高さを調整"
+            />
+
+            {/* ★入力コンテンツ部分（内部をスクロール可能に） ★ */}
+            <div className="flex-1 overflow-y-auto p-4 pt-2"></div>
+
+            {/* 採点モードUI */}
+            {problem && !waitingFeedback && gradingMode && (
+              <div
+                className="mb-3 border rounded p-3 bg-slate-50 space-y-3
+                          dark:bg-gray-900 dark:border-gray-800"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-sm font-semibold">採点モード：提出を入力</div>
+                  <div className="text-xs text-gray-600 dark:text-gray-300">
+                    {gradingSaving ? '保存中…' : loading ? '採点中…' : ''}
+                  </div>
                 </div>
-              </div>
 
-              {/* 入力方式切替 */}
-              <div className="flex items-center gap-2 text-xs">
-                <button
-                  type="button"
-                  className={`px-2 py-1 rounded border ${
-                    gradingInputMode === 'files'
-                      ? 'bg-emerald-200 border-emerald-300'
-                      : 'bg-white border-gray-200 hover:bg-gray-50 dark:bg-gray-950 dark:border-gray-700 dark:hover:bg-gray-800'
-                  }`}
-                  onClick={() => setGradingInputMode('files')}
-                  disabled={loading || gradingSaving}
-                >
-                  📁 ファイル提出
-                </button>
-                <button
-                  type="button"
-                  className={`px-2 py-1 rounded border ${
-                    gradingInputMode === 'paste'
-                      ? 'bg-emerald-200 border-emerald-300'
-                      : 'bg-white border-gray-200 hover:bg-gray-50 dark:bg-gray-950 dark:border-gray-700 dark:hover:bg-gray-800'
-                  }`}
-                  onClick={() => setGradingInputMode('paste')}
-                  disabled={loading || gradingSaving}
-                >
-                  📋 貼り付け提出
-                </button>
-
-                <div className="ml-auto text-xs text-gray-600 dark:text-gray-300">
-                  ※ ここで送信すると「採点＋提出保存」まで行います
-                </div>
-              </div>
-
-              {/* files */}
-              {gradingInputMode === 'files' && (
-                <div className="space-y-2">
-                  <div
-                    className="border-2 border-dashed rounded p-4 text-sm
-                              bg-white border-gray-200 text-gray-700
-                              dark:bg-gray-950 dark:border-gray-700 dark:text-gray-200"
-                    onDragOver={(e) => e.preventDefault()}
-                    onDrop={handleDropOnFileZone}
+                {/* 入力方式切替 */}
+                <div className="flex items-center gap-2 text-xs">
+                  <button
+                    type="button"
+                    className={`px-2 py-1 rounded border ${
+                      gradingInputMode === 'files'
+                        ? 'bg-emerald-200 border-emerald-300'
+                        : 'bg-white border-gray-200 hover:bg-gray-50 dark:bg-gray-950 dark:border-gray-700 dark:hover:bg-gray-800'
+                    }`}
+                    onClick={() => setGradingInputMode('files')}
+                    disabled={loading || gradingSaving}
                   >
-                    <div className="font-semibold mb-1">ここに .java / .c / .cpp / .py / .ts などをドラッグ&ドロップ</div>
-                    <div className="text-xs mb-2 text-gray-600 dark:text-gray-300">
-                      または「ファイル選択」から追加できます（複数可）
+                    📁 ファイル提出
+                  </button>
+                  <button
+                    type="button"
+                    className={`px-2 py-1 rounded border ${
+                      gradingInputMode === 'paste'
+                        ? 'bg-emerald-200 border-emerald-300'
+                        : 'bg-white border-gray-200 hover:bg-gray-50 dark:bg-gray-950 dark:border-gray-700 dark:hover:bg-gray-800'
+                    }`}
+                    onClick={() => setGradingInputMode('paste')}
+                    disabled={loading || gradingSaving}
+                  >
+                    📋 貼り付け提出
+                  </button>
+
+                  <div className="ml-auto text-xs text-gray-600 dark:text-gray-300">
+                    ※ ここで送信すると「採点＋提出保存」まで行います
+                  </div>
+                </div>
+
+                {/* files */}
+                {gradingInputMode === 'files' && (
+                  <div className="space-y-2">
+                    <div
+                      className="border-2 border-dashed rounded p-4 text-sm
+                                bg-white border-gray-200 text-gray-700
+                                dark:bg-gray-950 dark:border-gray-700 dark:text-gray-200"
+                      onDragOver={(e) => e.preventDefault()}
+                      onDrop={handleDropOnFileZone}
+                    >
+                      <div className="font-semibold mb-1">ここに .java / .c / .cpp / .py / .ts などをドラッグ&ドロップ</div>
+                      <div className="text-xs mb-2 text-gray-600 dark:text-gray-300">
+                        または「ファイル選択」から追加できます（複数可）
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <input
+                          ref={fileInputRef}
+                          type="file"
+                          multiple
+                          className="hidden"
+                          onChange={(e) => {
+                            handlePickFiles(e.target.files)
+                            // 同じファイルを再選択できるようにする
+                            e.currentTarget.value = ''
+                          }}
+                        />
+                        <button
+                          type="button"
+                          className="px-3 py-2 rounded bg-blue-600 text-white text-xs hover:opacity-90 disabled:opacity-50"
+                          onClick={() => fileInputRef.current?.click()}
+                          disabled={loading || gradingSaving}
+                        >
+                          ファイル選択
+                        </button>
+
+                        <button
+                          type="button"
+                          className="px-3 py-2 rounded border text-xs
+                                    bg-white border-gray-200 hover:bg-gray-50
+                                    dark:bg-gray-950 dark:border-gray-700 dark:hover:bg-gray-800
+                                    disabled:opacity-50"
+                          onClick={() => setUploads([])}
+                          disabled={loading || gradingSaving || uploads.length === 0}
+                        >
+                          クリア
+                        </button>
+                      </div>
                     </div>
 
-                    <div className="flex items-center gap-2">
-                      <input
-                        ref={fileInputRef}
-                        type="file"
-                        multiple
-                        className="hidden"
-                        onChange={(e) => {
-                          handlePickFiles(e.target.files)
-                          // 同じファイルを再選択できるようにする
-                          e.currentTarget.value = ''
-                        }}
-                      />
-                      <button
-                        type="button"
-                        className="px-3 py-2 rounded bg-blue-600 text-white text-xs hover:opacity-90 disabled:opacity-50"
-                        onClick={() => fileInputRef.current?.click()}
-                        disabled={loading || gradingSaving}
-                      >
-                        ファイル選択
-                      </button>
+                    {uploads.length > 0 && (
+                      <div className="border rounded p-3 bg-white space-y-2 border-gray-200
+                                      dark:bg-gray-950 dark:border-gray-700">
+                        <div className="text-xs font-semibold">選択中のファイル</div>
+                        <div className="space-y-1">
+                          {uploads.map((u, idx) => (
+                            <div
+                              key={`${u.name}-${idx}`}
+                              className="flex items-center justify-between gap-2 text-xs border rounded px-2 py-1
+                                        border-gray-200 bg-gray-50
+                                        dark:border-gray-700 dark:bg-gray-900"
+                            >
+                              <div className="truncate">
+                                <span className="font-mono">{u.name}</span>
+                                <span className="ml-2 text-gray-500 dark:text-gray-300">
+                                  ({Math.round(u.size / 1024)} KB)
+                                </span>
+                              </div>
+                              <button
+                                type="button"
+                                className="px-2 py-1 rounded bg-rose-600 text-white hover:opacity-90 disabled:opacity-50"
+                                onClick={() => removeUpload(idx)}
+                                disabled={loading || gradingSaving}
+                              >
+                                削除
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
 
+                {/* paste */}
+                {gradingInputMode === 'paste' && (
+                  <div className="space-y-2">
+                    <div className="text-xs text-gray-700 dark:text-gray-200">
+                      複数ファイルでも、区切りを書いてまとめて貼ってOKです（例：// Main.java など）。
+                    </div>
+                    <AutoGrowTextarea
+                      ref={pasteTextareaRef as any}
+                      value={gradingPaste}
+                      onChange={(e) => setGradingPaste(e.target.value)}
+                      placeholder={'例）// Main.java\n...\n\n// Sub.java\n...'}
+                      maxVh={45}
+                      className="min-h-[12rem] rounded-xl"
+                      disabled={loading || gradingSaving}
+                    />
+                    <div className="flex items-center gap-2">
                       <button
                         type="button"
                         className="px-3 py-2 rounded border text-xs
                                   bg-white border-gray-200 hover:bg-gray-50
                                   dark:bg-gray-950 dark:border-gray-700 dark:hover:bg-gray-800
                                   disabled:opacity-50"
-                        onClick={() => setUploads([])}
-                        disabled={loading || gradingSaving || uploads.length === 0}
+                        onClick={() => setGradingPaste('')}
+                        disabled={loading || gradingSaving || !gradingPaste}
                       >
                         クリア
                       </button>
                     </div>
                   </div>
+                )}
 
-                  {uploads.length > 0 && (
-                    <div className="border rounded p-3 bg-white space-y-2 border-gray-200
-                                    dark:bg-gray-950 dark:border-gray-700">
-                      <div className="text-xs font-semibold">選択中のファイル</div>
-                      <div className="space-y-1">
-                        {uploads.map((u, idx) => (
-                          <div
-                            key={`${u.name}-${idx}`}
-                            className="flex items-center justify-between gap-2 text-xs border rounded px-2 py-1
-                                      border-gray-200 bg-gray-50
-                                      dark:border-gray-700 dark:bg-gray-900"
-                          >
-                            <div className="truncate">
-                              <span className="font-mono">{u.name}</span>
-                              <span className="ml-2 text-gray-500 dark:text-gray-300">
-                                ({Math.round(u.size / 1024)} KB)
-                              </span>
-                            </div>
-                            <button
-                              type="button"
-                              className="px-2 py-1 rounded bg-rose-600 text-white hover:opacity-90 disabled:opacity-50"
-                              onClick={() => removeUpload(idx)}
-                              disabled={loading || gradingSaving}
-                            >
-                              削除
-                            </button>
-                          </div>
-                        ))}
+                {/* submit */}
+                <div className="flex items-center justify-end gap-2 pt-1">
+                  <button
+                    type="button"
+                    className="px-4 py-2 rounded bg-emerald-600 text-white text-sm hover:opacity-90 disabled:opacity-50"
+                    onClick={handleGradingSubmit}
+                    disabled={
+                      loading ||
+                      gradingSaving ||
+                      !problem ||
+                      (gradingInputMode === 'files' ? uploads.length === 0 : !gradingPaste.trim())
+                    }
+                  >
+                    {loading ? '採点中…' : '採点して保存'}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* 通常モード：ステップ入力 UI */}
+            {!gradingMode && (
+              <div className="flex flex-col h-full overflow-hidden">
+              {/* ② 固定ヘッダー：質問パターン選択ボタン（未選択 'none' の時のみ表示） */}
+                {questionMode === 'none' && (
+                  <>
+                    <div className="px-4 py-3 flex flex-wrap items-center gap-2 text-xs shrink-0 bg-gray-50/50 dark:bg-gray-900/20 border-b dark:border-gray-800">
+                      <span className="text-gray-600 dark:text-gray-300">質問のパターンから選ぶ：</span>
+
+                      {/* 修正ポイント: 
+                          このブロックは questionMode === 'none' の時しか実行されないため、
+                          個別のボタンで 'task' かどうかを比較する必要はありません（比較するとTSエラーになります）。
+                          そのため、すべて「未選択時のスタイル」に固定しています。
+                      */}
+                      <button
+                        type="button"
+                        className="px-2 py-1 rounded border bg-orange-50 border-orange-200 dark:bg-gray-900 dark:border-gray-700 dark:text-gray-100 hover:bg-orange-100 transition-colors"
+                        onClick={() => setQuestionMode('task')}
+                        disabled={!problem || waitingFeedback || loading}
+                      >
+                        🟧 課題の読み解き・進め方
+                      </button>
+
+                      <button
+                        type="button"
+                        className="px-2 py-1 rounded border bg-blue-50 border-blue-200 dark:bg-gray-900 dark:border-gray-700 dark:text-gray-100 hover:bg-blue-100 transition-colors"
+                        onClick={() => setQuestionMode('syntax')}
+                        disabled={!problem || waitingFeedback || loading}
+                      >
+                        🟦 書き方の相談
+                      </button>
+
+                      <button
+                        type="button"
+                        className="px-2 py-1 rounded border bg-red-50 border-red-200 dark:bg-gray-900 dark:border-gray-700 dark:text-gray-100 hover:bg-red-100 transition-colors"
+                        onClick={() => setQuestionMode('error')}
+                        disabled={!problem || waitingFeedback || loading}
+                      >
+                        🟥 エラー・例外の相談
+                      </button>
+
+                      <button
+                        type="button"
+                        className="px-2 py-1 rounded border bg-green-50 border-green-200 dark:bg-gray-900 dark:border-gray-700 dark:text-gray-100 hover:bg-green-100 transition-colors"
+                        onClick={() => setQuestionMode('review')}
+                        disabled={!problem || waitingFeedback || loading}
+                      >
+                        🟩 コードレビュー・バグの相談
+                      </button>
+
+                      <button
+                        type="button"
+                        className="px-2 py-1 rounded border bg-yellow-50 border-yellow-200 dark:bg-gray-900 dark:border-gray-700 dark:text-gray-100 hover:bg-yellow-100 transition-colors"
+                        onClick={() => setQuestionMode('algo')}
+                        disabled={!problem || waitingFeedback || loading}
+                      >
+                        🟨 アルゴリズム・理論の相談
+                      </button>
+
+                      <button
+                        type="button"
+                        className="px-2 py-1 rounded border bg-purple-50 border-purple-200 dark:bg-gray-900 dark:border-gray-700 dark:text-gray-100 hover:bg-purple-100 transition-colors"
+                        onClick={() => setQuestionMode('free')}
+                        disabled={!problem || waitingFeedback || loading}
+                      >
+                        🟪 自由記述の相談
+                      </button>
+
+                      <button
+                        type="button"
+                        className="px-2 py-1 rounded border bg-pink-50 border-pink-200 dark:bg-gray-900 dark:border-gray-700 dark:text-gray-100 hover:bg-pink-100 transition-colors"
+                        onClick={() => setQuestionMode('basic')}
+                        disabled={!problem || waitingFeedback || loading}
+                      >
+                        🔰 初歩的な質問
+                      </button>
+                    </div>
+
+                    {/* 案内文も 'none' の時だけ表示し、ボタンのすぐ下に配置 */}
+                    <div className="p-2 text-center">
+                      <div className="text-xs text-gray-500 dark:text-gray-400 leading-relaxed">
+                        まず上のボタンのどれかを選んでください。選んだ内容に応じて、1項目ずつ入力する画面が表示されます。
                       </div>
                     </div>
-                  )}
-                </div>
-              )}
-
-              {/* paste */}
-              {gradingInputMode === 'paste' && (
-                <div className="space-y-2">
-                  <div className="text-xs text-gray-700 dark:text-gray-200">
-                    複数ファイルでも、区切りを書いてまとめて貼ってOKです（例：// Main.java など）。
-                  </div>
-                  <AutoGrowTextarea
-                    ref={pasteTextareaRef as any}
-                    value={gradingPaste}
-                    onChange={(e) => setGradingPaste(e.target.value)}
-                    placeholder={'例）// Main.java\n...\n\n// Sub.java\n...'}
-                    maxVh={45}
-                    className="min-h-[12rem] rounded-xl"
-                    disabled={loading || gradingSaving}
-                  />
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      className="px-3 py-2 rounded border text-xs
-                                bg-white border-gray-200 hover:bg-gray-50
-                                dark:bg-gray-950 dark:border-gray-700 dark:hover:bg-gray-800
-                                disabled:opacity-50"
-                      onClick={() => setGradingPaste('')}
-                      disabled={loading || gradingSaving || !gradingPaste}
-                    >
-                      クリア
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {/* submit */}
-              <div className="flex items-center justify-end gap-2 pt-1">
-                <button
-                  type="button"
-                  className="px-4 py-2 rounded bg-emerald-600 text-white text-sm hover:opacity-90 disabled:opacity-50"
-                  onClick={handleGradingSubmit}
-                  disabled={
-                    loading ||
-                    gradingSaving ||
-                    !problem ||
-                    (gradingInputMode === 'files' ? uploads.length === 0 : !gradingPaste.trim())
-                  }
-                >
-                  {loading ? '採点中…' : '採点して保存'}
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* 通常モード：ステップ入力 UI */}
-          {!gradingMode && (
-            <div className="mt-4 space-y-3">
-              <div className="flex flex-wrap items-center gap-2 text-xs">
-                <span className="text-gray-600 dark:text-gray-300">質問のパターンから選ぶ：</span>
-
-                <button
-                  type="button"
-                  className={`px-2 py-1 rounded border ${
-                    questionMode === 'task'
-                      ? 'bg-orange-200 border-orange-300'
-                      : 'bg-orange-50 border-orange-200 hover:bg-orange-100'
-                  } dark:border-gray-700 ${
-                    questionMode === 'task'
-                      ? 'dark:bg-orange-900/25'
-                      : 'dark:bg-gray-900 dark:hover:bg-gray-800'
-                  }`}
-                  onClick={() => setQuestionMode('task')}
-                  disabled={!problem || waitingFeedback || loading}
-                >
-                  🟧 課題の読み解き・進め方
-                </button>
-
-                <button
-                  type="button"
-                  className={`px-2 py-1 rounded border ${
-                    questionMode === 'syntax'
-                      ? 'bg-blue-200 border-blue-300'
-                      : 'bg-blue-50 border-blue-200 hover:bg-blue-100'
-                  } dark:border-gray-700 ${
-                    questionMode === 'syntax'
-                      ? 'dark:bg-blue-900/25'
-                      : 'dark:bg-gray-900 dark:hover:bg-gray-800'
-                  }`}
-                  onClick={() => setQuestionMode('syntax')}
-                  disabled={!problem || waitingFeedback || loading}
-                >
-                  🟦 書き方の相談
-                </button>
-
-                <button
-                  type="button"
-                  className={`px-2 py-1 rounded border ${
-                    questionMode === 'error'
-                      ? 'bg-red-200 border-red-300'
-                      : 'bg-red-50 border-red-200 hover:bg-red-100'
-                  } dark:border-gray-700 ${
-                    questionMode === 'error'
-                      ? 'dark:bg-rose-900/25'
-                      : 'dark:bg-gray-900 dark:hover:bg-gray-800'
-                  }`}
-                  onClick={() => setQuestionMode('error')}
-                  disabled={!problem || waitingFeedback || loading}
-                >
-                  🟥 エラー・例外の相談
-                </button>
-
-                <button
-                  type="button"
-                  className={`px-2 py-1 rounded border ${
-                    questionMode === 'review'
-                      ? 'bg-green-200 border-green-300'
-                      : 'bg-green-50 border-green-200 hover:bg-green-100'
-                  } dark:border-gray-700 ${
-                    questionMode === 'review'
-                      ? 'dark:bg-emerald-900/25'
-                      : 'dark:bg-gray-900 dark:hover:bg-gray-800'
-                  }`}
-                  onClick={() => setQuestionMode('review')}
-                  disabled={!problem || waitingFeedback || loading}
-                >
-                  🟩 コードレビュー・バグの相談
-                </button>
-
-                <button
-                  type="button"
-                  className={`px-2 py-1 rounded border ${
-                    questionMode === 'algo'
-                      ? 'bg-yellow-200 border-yellow-300'
-                      : 'bg-yellow-50 border-yellow-200 hover:bg-yellow-100'
-                  } dark:border-gray-700 ${
-                    questionMode === 'algo'
-                      ? 'dark:bg-yellow-900/25'
-                      : 'dark:bg-gray-900 dark:hover:bg-gray-800'
-                  }`}
-                  onClick={() => setQuestionMode('algo')}
-                  disabled={!problem || waitingFeedback || loading}
-                >
-                  🟨 アルゴリズム・理論の相談
-                </button>
-
-                <button
-                  type="button"
-                  className={`px-2 py-1 rounded border ${
-                    questionMode === 'free'
-                      ? 'bg-purple-200 border-purple-300'
-                      : 'bg-purple-50 border-purple-200 hover:bg-purple-100'
-                  } dark:border-gray-700 ${
-                    questionMode === 'free'
-                      ? 'dark:bg-purple-900/25'
-                      : 'dark:bg-gray-900 dark:hover:bg-gray-800'
-                  }`}
-                  onClick={() => setQuestionMode('free')}
-                  disabled={!problem || waitingFeedback || loading}
-                >
-                  🟪 自由記述の相談
-                </button>
-
-                <button
-                  type="button"
-                  className={`px-2 py-1 rounded border ${
-                    questionMode === 'basic'
-                      ? 'bg-pink-200 border-pink-300'
-                      : 'bg-pink-50 border-pink-200 hover:bg-pink-100'
-                  } dark:border-gray-700 ${
-                    questionMode === 'basic'
-                      ? 'dark:bg-pink-900/25'
-                      : 'dark:bg-gray-900 dark:hover:bg-gray-800'
-                  }`}
-                  onClick={() => setQuestionMode('basic')}
-                  disabled={!problem || waitingFeedback || loading}
-                >
-                  🔰 初歩的な質問
-                </button>
-              </div>
-
-              {questionMode === 'none' && (
-                <div className="border rounded p-3 text-xs
-                                bg-gray-50 text-gray-700 border-gray-200
-                                dark:bg-gray-900 dark:text-gray-200 dark:border-gray-800">
-                  まず上のボタンのどれかを選んでください。選んだ内容に応じて、1項目ずつ入力する画面が表示されます。
-                </div>
-              )}
-
-              {questionMode !== 'none' && (
-                <div className="border rounded p-3 bg-white space-y-3 border-gray-200
-                                dark:bg-gray-950 dark:border-gray-800">
-                  <div className="flex items-center justify-between text-xs">
-                    <div className="font-semibold">{questionTitle}</div>
-                    <div className="text-gray-600 dark:text-gray-300">
-                      入力 {steps.length === 0 ? '0/0' : `${stepIndex + 1}/${steps.length}`}
+                  </>
+                )}
+                {questionMode !== 'none' && (
+                  /* ★ 入力エリア全体を縦のFlexコンテナにし、高さを100%活用します */
+                  <div className="flex flex-col h-full min-h-0 bg-white dark:bg-gray-950">
+                    
+                    {/* 1. ヘッダー部分（固定：タイトルとステップ数） 
+                           余白を調整し、境界線がすぐ上に来るようにしています */}
+                    <div className="flex items-center justify-between text-xs p-4 pb-2 shrink-0 border-b border-gray-100 dark:border-gray-800">
+                      <div className="font-bold text-blue-600 dark:text-blue-400">{questionTitle}</div>
+                      <div className="text-gray-600 dark:text-gray-300">
+                        入力 {steps.length === 0 ? '0/0' : `${stepIndex + 1}/${steps.length}`}
+                      </div>
                     </div>
-                  </div>
 
-                  {steps.length > 0 && (() => {
-                    const totalSteps = steps.length
-                    const clampedIndex = Math.min(stepIndex, totalSteps - 1)
-                    const currentStep = steps[clampedIndex]
-                    const canGoNext = clampedIndex < totalSteps - 1
+                    {steps.length > 0 && (() => {
+                      /* 既存の変数はすべて維持 */
+                      const totalSteps = steps.length
+                      const clampedIndex = Math.min(stepIndex, totalSteps - 1)
+                      const currentStep = steps[clampedIndex]
+                      const canGoNext = clampedIndex < totalSteps - 1
 
-                    const labelClass = `text-xs font-semibold whitespace-pre-wrap ${
-                      currentStep.highlight ? 'text-red-700 dark:text-rose-300' : ''
-                    }`
+                      const labelClass = `text-xs font-semibold whitespace-pre-wrap ${
+                        currentStep.highlight ? 'text-red-700 dark:text-rose-300' : ''
+                      }`
 
-                    return (
-                      <>
-                        <div className="space-y-1">
-                          <div className={labelClass}>
-                            {currentStep.label}
-                          </div>
-                          <AutoGrowTextarea
-                            ref={stepTextareaRef as any}
-                            value={currentStep.value}
-                            onChange={(e) => currentStep.setValue(e.target.value)}
-                            placeholder={currentStep.placeholder}
-                            maxVh={50}
-                            className="min-h-[8rem] rounded-xl"
-                            onKeyDown={(e) => {
-                              if (waitingFeedback || loading) return
-                              if (e.key === 'Tab') {
-                                e.preventDefault()
-                                const el = e.currentTarget
-                                const start = el.selectionStart ?? 0
-                                const end = el.selectionEnd ?? 0
-                                const indent = '  '
-                                const v = currentStep.value || ''
-                                const next = v.slice(0, start) + indent + v.slice(end)
-                                currentStep.setValue(next)
-                                requestAnimationFrame(() => {
-                                  (el as any).selectionStart = (el as any).selectionEnd = start + indent.length
-                                })
-                              }
-                              if (e.key === 'Enter' && !e.shiftKey) {
-                                e.preventDefault()
-                                const total = steps.length
-                                const isLast = clampedIndex === total - 1
-                                if (isLast) {
-                                  if (sendDisabled) return
-                                  handleSend()
-                                } else {
-                                  setStepIndex((i) => Math.min(total - 1, i + 1))
+                      return (
+                        /* ★ ここをFlexで「スクロールする入力部」と「固定ボタン」に分割します */
+                        <div className="flex-1 flex flex-col min-h-0">
+                          
+                          {/* A. ボディ部分（スクロール可能：質問ラベルとテキストエリア） */}
+                          <div className="flex-1 overflow-y-auto p-4 space-y-3 min-h-0">
+                            <div className={labelClass}>
+                              {currentStep.label}
+                            </div>
+                            <AutoGrowTextarea
+                              ref={stepTextareaRef as any}
+                              value={currentStep.value}
+                              onChange={(e) => currentStep.setValue(e.target.value)}
+                              placeholder={currentStep.placeholder}
+                              /* コンテナ側でスクロールさせるため、textarea自体の最大高さ制限を広げます */
+                              maxVh={100} 
+                              className="min-h-[12rem] rounded-xl shadow-sm focus:ring-2 focus:ring-blue-500"
+                              onKeyDown={(e) => {
+                                if (waitingFeedback || loading) return
+                                if (e.key === 'Tab') {
+                                  e.preventDefault()
+                                  const el = e.currentTarget
+                                  const start = el.selectionStart ?? 0
+                                  const end = el.selectionEnd ?? 0
+                                  const indent = '  '
+                                  const v = currentStep.value || ''
+                                  const next = v.slice(0, start) + indent + v.slice(end)
+                                  currentStep.setValue(next)
+                                  requestAnimationFrame(() => {
+                                    (el as any).selectionStart = (el as any).selectionEnd = start + indent.length
+                                  })
                                 }
-                              }
-                            }}
-                          />
-                        </div>
-
-                        <div className="flex items-center justify-between text-xs mt-2">
-                          <div className="flex items-center gap-2">
-                            <button
-                              type="button"
-                              className="px-2 py-1 rounded border hover:bg-gray-50
-                                         border-gray-200 dark:border-gray-700
-                                         dark:hover:bg-gray-900"
-                              onClick={() => setQuestionMode('none')}
-                            >
-                              ← パターン選択に戻る
-                            </button>
-                            {steps.length > 1 && (
-                              <>
-                                <button
-                                  type="button"
-                                  className="px-2 py-1 rounded border hover:bg-gray-50 disabled:opacity-40
-                                             border-gray-200 dark:border-gray-700
-                                             dark:hover:bg-gray-900"
-                                  onClick={() => setStepIndex((i) => Math.max(0, i - 1))}
-                                  disabled={clampedIndex === 0}
-                                >
-                                  ◀ 前へ
-                                </button>
-                                <button
-                                  type="button"
-                                  className="px-2 py-1 rounded border hover:bg-gray-50 disabled:opacity-40
-                                             border-gray-200 dark:border-gray-700
-                                             dark:hover:bg-gray-900"
-                                  onClick={() =>
-                                    setStepIndex((i) => Math.min(steps.length - 1, i + 1))
+                                if (e.key === 'Enter' && !e.shiftKey) {
+                                  e.preventDefault()
+                                  const isLast = clampedIndex === totalSteps - 1
+                                  if (isLast) {
+                                    if (!sendDisabled) handleSend()
+                                  } else {
+                                    setStepIndex((i) => Math.min(totalSteps - 1, i + 1))
                                   }
-                                  disabled={!canGoNext}
-                                >
-                                  次へ ▶
-                                </button>
-                              </>
-                            )}
+                                }
+                              }}
+                            />
                           </div>
 
-                          <div className="flex items-center gap-3">
-                            <button
-                              className="bg-blue-600 text-white px-4 py-2 rounded disabled:opacity-50"
-                              onClick={handleSend}
-                              disabled={sendDisabled}
-                            >
-                              {loading ? '送信中...' : '送信'}
-                            </button>
+                          {/* B. フッター部分（固定：操作ボタン類。リサイズしても常に底に表示されます） */}
+                          <div className="shrink-0 p-3 px-4 border-t bg-gray-50/80 dark:bg-gray-900/50 flex items-center justify-between shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)]">
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                className="px-3 py-1.5 rounded border text-xs bg-white dark:bg-gray-800 hover:bg-gray-50 border-gray-200 dark:border-gray-700 dark:hover:bg-gray-700 transition-colors"
+                                onClick={() => setQuestionMode('none')}
+                              >
+                                ← パターン選択に戻る
+                              </button>
+                              
+                              {steps.length > 1 && (
+                                <div className="flex gap-1 border-l pl-2 border-gray-200 dark:border-gray-700">
+                                  <button
+                                    type="button"
+                                    className="px-3 py-1.5 rounded border text-xs bg-white dark:bg-gray-800 hover:bg-gray-50 disabled:opacity-40 border-gray-200 dark:border-gray-700"
+                                    onClick={() => setStepIndex((i) => Math.max(0, i - 1))}
+                                    disabled={clampedIndex === 0}
+                                  >
+                                    ◀ 前へ
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="px-3 py-1.5 rounded border text-xs bg-white dark:bg-gray-800 hover:bg-gray-50 disabled:opacity-40 border-gray-200 dark:border-gray-700"
+                                    onClick={() => setStepIndex((i) => Math.min(steps.length - 1, i + 1))}
+                                    disabled={!canGoNext}
+                                  >
+                                    次へ ▶
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+
+                            <div className="flex items-center gap-3">
+                              <button
+                                className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-1.5 rounded-lg text-sm font-bold shadow-md disabled:opacity-50 transition-all active:scale-95"
+                                onClick={handleSend}
+                                disabled={sendDisabled}
+                              >
+                                {loading ? '送信中...' : '送信'}
+                              </button>
+                            </div>
                           </div>
                         </div>
-                      </>
-                    )
-                  })()}
-                </div>
-              )}
-            </div>
-          )}
+                      )
+                    })()}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       </main>
     </>
